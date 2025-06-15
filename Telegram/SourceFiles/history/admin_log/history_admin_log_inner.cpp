@@ -1409,6 +1409,22 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 					_menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
 						copyContextText(itemId);
 					}, &st::menuIconCopy);
+
+					
+				_menu->addAction("Copy Text And User Info",
+							[=, this]
+							{
+								if (const auto item = session().data().message(itemId)) {
+									TextUtilities::SetClipboardText(
+										TextForMimeData::Simple(
+											"name: " + item->from()->name() + "\n"
+											"username: " + item->from()->username() + "\n"
+											"userbio: " + item->from()->about() + "\n"
+											"text: " + item->originalText().text
+										));
+								}
+							},
+							&st::menuIconCopy);
 				}
 			}
 		}

@@ -1262,6 +1262,22 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						}
 					}
 				}, &st::menuIconCopy);
+
+				
+				result->addAction("Copy Text And User Info",
+							[=]
+							{
+								if (const auto item = owner->message(itemId)) {
+									TextUtilities::SetClipboardText(
+										TextForMimeData::Simple(
+											"name: " + item->from()->name() + "\n"
+											"username: " + item->from()->username() + "\n"
+											"userbio: " + item->from()->about() + "\n"
+											"text: " + item->originalText().text
+										));
+								}
+							},
+							&st::menuIconCopy);
 			}
 
 			const auto translate = mediaHasTextForCopy

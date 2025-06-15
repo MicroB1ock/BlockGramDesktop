@@ -50,12 +50,14 @@
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/text/text_entity.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/popup_menu.h"
 #include "window/window_session_controller.h"
 
 #include <QtGui/QClipboard>
 #include <QtWidgets/QApplication>
+#include <format>
 
 #include "history/view/history_view_context_menu.h"
 #include "ui/ui_utility.h"
@@ -1238,7 +1240,22 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 										 copyContextText(itemId);
 									 },
 									 &st::menuIconCopy);
+					_menu->addAction("Copy Text And User Info",
+								[=, this]
+								{
+									if (const auto item = session().data().message(itemId)) {
+										TextUtilities::SetClipboardText(
+											TextForMimeData::Simple(
+												"name: " + item->from()->name() + "\n"
+												"username: " + item->from()->username() + "\n"
+												"userbio: " + item->from()->about() + "\n"
+												"text: " + item->originalText().text
+											));
+									}
+								},
+								&st::menuIconCopy);
 				}
+
 			}
 		}
 
