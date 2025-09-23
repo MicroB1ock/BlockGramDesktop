@@ -8,22 +8,27 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_main_menu.h"
 
 #include "apiwrap.h"
+#include "base/event_filter.h"
 #include "base/qt_signal_producer.h"
 #include "boxes/about_box.h"
 #include "boxes/peer_list_controllers.h"
 #include "boxes/premium_preview_box.h"
+#include "calls/group/calls_group_common.h"
 #include "calls/calls_box_controller.h"
+#include "calls/calls_instance.h"
 #include "core/application.h"
 #include "core/click_handler_types.h"
 #include "data/data_changes.h"
 #include "data/data_document_media.h"
 #include "data/data_folder.h"
+#include "data/data_group_call.h"
 #include "data/data_session.h"
 #include "data/data_stories.h"
 #include "data/data_user.h"
 #include "info/info_memento.h"
 #include "info/profile/info_profile_badge.h"
 #include "info/profile/info_profile_emoji_status_panel.h"
+#include "info/profile/info_profile_icon.h"
 #include "info/stories/info_stories_widget.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
@@ -37,14 +42,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "support/support_templates.h"
+#include "tde2e/tde2e_api.h"
+#include "tde2e/tde2e_integration.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/chat/chat_theme.h"
+#include "ui/controls/swipe_handler.h"
 #include "ui/controls/userpic_button.h"
 #include "ui/effects/snowflakes.h"
 #include "ui/effects/toggle_arrow.h"
 #include "ui/painter.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
+#include "ui/ui_utility.h"
 #include "ui/unread_badge_paint.h"
 #include "ui/vertical_list.h"
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
@@ -77,8 +86,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/features/streamer_mode/streamer_mode.h"
 #include "styles/style_ayu_icons.h"
 #include "lang_auto.h"
-#include "ayu/ui/settings/settings_ayu.h"
-
+#include "ayu/ui/settings/settings_main.h"
 
 namespace Window {
 namespace {
@@ -97,89 +105,6 @@ constexpr auto kPlayStatusLimit = 12;
 	const auto now = QDate::currentDate();
 	return (now.month() == 12 && now.day() >= 24)
 		|| (now.month() == 1 && now.day() == 1);
-}
-
-void ShowCallsBox(not_null<Window::SessionController*> window) {
-	struct State {
-		State(not_null<Window::SessionController*> window)
-		: callsController(window)
-		, groupCallsController(window) {
-		}
-		Calls::BoxController callsController;
-		PeerListContentDelegateSimple callsDelegate;
-
-		Calls::GroupCalls::ListController groupCallsController;
-		PeerListContentDelegateSimple groupCallsDelegate;
-
-		base::unique_qptr<Ui::PopupMenu> menu;
-	};
-
-	window->show(Box([=](not_null<Ui::GenericBox*> box) {
-		const auto state = box->lifetime().make_state<State>(window);
-
-		const auto groupCalls = box->addRow(
-			object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-				box,
-				object_ptr<Ui::VerticalLayout>(box)),
-			{});
-		groupCalls->hide(anim::type::instant);
-		groupCalls->toggleOn(state->groupCallsController.shownValue());
-
-		Ui::AddSubsectionTitle(
-			groupCalls->entity(),
-			tr::lng_call_box_groupcalls_subtitle());
-		state->groupCallsDelegate.setContent(groupCalls->entity()->add(
-			object_ptr<PeerListContent>(box, &state->groupCallsController),
-			{}));
-		state->groupCallsController.setDelegate(&state->groupCallsDelegate);
-		Ui::AddSkip(groupCalls->entity());
-		Ui::AddDivider(groupCalls->entity());
-		Ui::AddSkip(groupCalls->entity());
-
-		const auto content = box->addRow(
-			object_ptr<PeerListContent>(box, &state->callsController),
-			{});
-		state->callsDelegate.setContent(content);
-		state->callsController.setDelegate(&state->callsDelegate);
-
-		box->setWidth(state->callsController.contentWidth());
-		state->callsController.boxHeightValue(
-		) | rpl::start_with_next([=](int height) {
-			box->setMinHeight(height);
-		}, box->lifetime());
-		box->setTitle(tr::lng_call_box_title());
-		box->addButton(tr::lng_close(), [=] {
-			box->closeBox();
-		});
-		const auto menuButton = box->addTopButton(st::infoTopBarMenu);
-		menuButton->setClickedCallback([=] {
-			state->menu = base::make_unique_q<Ui::PopupMenu>(
-				menuButton,
-				st::popupMenuWithIcons);
-			const auto showSettings = [=] {
-				window->showSettings(
-					Settings::Calls::Id(),
-					Window::SectionShow(anim::type::instant));
-			};
-			const auto clearAll = crl::guard(box, [=] {
-				box->uiShow()->showBox(Box(Calls::ClearCallsBox, window));
-			});
-			state->menu->addAction(
-				tr::lng_settings_section_call_settings(tr::now),
-				showSettings,
-				&st::menuIconSettings);
-			if (state->callsDelegate.peerListFullRowsCount() > 0) {
-				Ui::Menu::CreateAddActionCallback(state->menu)({
-					.text = tr::lng_call_box_clear_all(tr::now),
-					.handler = clearAll,
-					.icon = &st::menuIconDeleteAttention,
-					.isAttention = true,
-				});
-			}
-			state->menu->popup(QCursor::pos());
-			return true;
-		});
-	}));
 }
 
 [[nodiscard]] rpl::producer<TextWithEntities> SetStatusLabel(
@@ -390,7 +315,8 @@ MainMenu::MainMenu(
 , _badge(std::make_unique<Info::Profile::Badge>(
 	this,
 	st::settingsInfoPeerBadge,
-	controller->session().user(),
+	&controller->session(),
+	Info::Profile::BadgeContentForPeer(controller->session().user()),
 	_emojiStatusPanel.get(),
 	[=] { return controller->isGifPausedAtLeastFor(GifPauseReason::Layer); },
 	kPlayStatusLimit,
@@ -475,7 +401,7 @@ MainMenu::MainMenu(
 	_version->setLink(
 		2,
 		std::make_shared<LambdaClickHandler>([=] {
-			controller->show(Box<AboutBox>());
+			controller->show(Box(AboutBox, controller));
 		}));
 
 	rpl::combine(
@@ -530,6 +456,8 @@ MainMenu::MainMenu(
 			}
 		}, lifetime());
 	}
+
+	setupSwipe();
 }
 
 MainMenu::~MainMenu() = default;
@@ -695,7 +623,7 @@ void MainMenu::setupAccountsToggle() {
 
 void MainMenu::setupSetEmojiStatus() {
 	_setEmojiStatus->overrideLinkClickHandler([=] {
-		_controller->showSettings(Settings::Ayu::Id());
+		_controller->showSettings(Settings::AyuMain::Id());
 	});
 }
 
@@ -710,7 +638,7 @@ void MainMenu::showFinished() {
 void MainMenu::setupMenu() {
 	using namespace Settings;
 
-	const auto settings = &AyuSettings::getInstance();
+	const auto &settings = AyuSettings::getInstance();
 
 	const auto controller = _controller;
 	const auto addAction = [&](
@@ -723,6 +651,7 @@ void MainMenu::setupMenu() {
 			std::move(descriptor));
 	};
 	if (!_controller->session().supportMode()) {
+		if (settings.showMyProfileInDrawer)
 		_menu->add(
 			CreateButtonWithIcon(
 				_menu,
@@ -734,12 +663,15 @@ void MainMenu::setupMenu() {
 				Info::Stories::Make(controller->session().user()));
 		});
 
+		if (settings.showBotsInDrawer)
 		SetupMenuBots(_menu, controller);
 
+		if (settings.showMyProfileInDrawer || settings.showBotsInDrawer)
 		_menu->add(
 			object_ptr<Ui::PlainShadow>(_menu),
 			{ 0, st::mainMenuSkip, 0, st::mainMenuSkip });
 
+		if (settings.showNewGroupInDrawer)
 		AddMyChannelsBox(addAction(
 			tr::lng_create_group_title(),
 			{ &st::menuIconGroups }
@@ -749,6 +681,7 @@ void MainMenu::setupMenu() {
 			}
 		});
 
+		if (settings.showNewChannelInDrawer)
 		AddMyChannelsBox(addAction(
 			tr::lng_create_channel_title(),
 			{ &st::menuIconChannel }
@@ -758,18 +691,21 @@ void MainMenu::setupMenu() {
 			}
 		});
 
+		if (settings.showContactsInDrawer)
 		addAction(
 			tr::lng_menu_contacts(),
 			{ &st::menuIconUserShow }
 		)->setClickedCallback([=] {
 			controller->show(PrepareContactsBox(controller));
 		});
+		if (settings.showCallsInDrawer)
 		addAction(
 			tr::lng_menu_calls(),
 			{ &st::menuIconPhone }
 		)->setClickedCallback([=] {
-			ShowCallsBox(controller);
+			::Calls::ShowCallsBox(controller);
 		});
+		if (settings.showSavedMessagesInDrawer)
 		addAction(
 			tr::lng_saved_messages(),
 			{ &st::menuIconSavedMessages }
@@ -777,28 +713,26 @@ void MainMenu::setupMenu() {
 			controller->showPeerHistory(controller->session().user());
 		});
 
-		const auto settings = &AyuSettings::getInstance();
-
-		if (settings->showLReadToggleInDrawer) {
+		if (settings.showLReadToggleInDrawer) {
 			addAction(
 				tr::ayu_LReadMessages(),
 				{&st::ayuLReadMenuIcon}
 			)->setClickedCallback([=]
 			{
-				auto prev = settings->sendReadMessages;
-				settings->set_sendReadMessages(false);
+				const auto prev = settings.sendReadMessages;
+				AyuSettings::set_sendReadMessages(false);
 
-				auto chats = controller->session().data().chatsList();
+				const auto chats = controller->session().data().chatsList();
 				MarkAsReadChatList(chats);
 
-				settings->set_sendReadMessages(prev);
+				AyuSettings::set_sendReadMessages(prev);
 			});
 		}
 
-		if (settings->showSReadToggleInDrawer) {
+		if (settings.showSReadToggleInDrawer) {
 			auto callback = [=](Fn<void()> &&close) {
-				auto prev = settings->sendReadMessages;
-				settings->set_sendReadMessages(true);
+				auto prev = settings.sendReadMessages;
+				AyuSettings::set_sendReadMessages(true);
 
 				auto chats = controller->session().data().chatsList();
 				MarkAsReadChatList(chats);
@@ -806,7 +740,7 @@ void MainMenu::setupMenu() {
 				// slight delay for forums to send packets
 				dispatchToMainThread([=]
 				{
-					settings->set_sendReadMessages(prev);
+					AyuSettings::set_sendReadMessages(prev);
 				}, 200);
 				close();
 			};
@@ -855,6 +789,8 @@ void MainMenu::setupMenu() {
 		controller->showSettings();
 	});
 
+	if (settings.showNightModeToggleInDrawer) {
+
 	_nightThemeToggle = addAction(
 		tr::lng_menu_night_mode(),
 		{ &st::menuIconNightMode }
@@ -884,30 +820,40 @@ void MainMenu::setupMenu() {
 			&_controller->window(),
 			toggle);
 	}, _nightThemeToggle->lifetime());
+	Core::App().settings().systemDarkModeValue(
+	) | rpl::start_with_next([=](std::optional<bool> darkMode) {
+		const auto darkModeEnabled
+			= Core::App().settings().systemDarkModeEnabled();
+		if (darkModeEnabled && darkMode.has_value()) {
+			_nightThemeSwitches.fire_copy(*darkMode);
+		}
+	}, _nightThemeToggle->lifetime());
 
-	if (settings->showGhostToggleInDrawer) {
-		_ghostModeToggle = addAction(
+	}
+
+	if (settings.showGhostToggleInDrawer) {
+		const auto ghostModeToggle = addAction(
 			tr::ayu_GhostModeToggle(),
 			{&st::ayuGhostIcon}
 		)->toggleOn(AyuSettings::get_ghostModeEnabledReactive());
 
-		_ghostModeToggle->toggledChanges(
+		ghostModeToggle->toggledChanges(
 		) | rpl::start_with_next(
 			[=](bool ghostMode)
 			{
-				settings->set_ghostModeEnabled(ghostMode);
+				AyuSettings::set_ghostModeEnabled(ghostMode);
 				AyuSettings::save();
 			},
-			_ghostModeToggle->lifetime());
+			ghostModeToggle->lifetime());
 	}
 
-	if (settings->showStreamerToggleInDrawer) {
-		_streamerModeToggle = addAction(
+	if (settings.showStreamerToggleInDrawer) {
+		const auto streamerModeToggle = addAction(
 			tr::ayu_StreamerModeToggle(),
 			{&st::ayuStreamerModeMenuIcon}
 		)->toggleOn(rpl::single(AyuFeatures::StreamerMode::isEnabled()));
 
-		_streamerModeToggle->toggledChanges(
+		streamerModeToggle->toggledChanges(
 		) | rpl::start_with_next(
 			[=](bool enabled)
 			{
@@ -917,17 +863,8 @@ void MainMenu::setupMenu() {
 					AyuFeatures::StreamerMode::disable();
 				}
 			},
-			_streamerModeToggle->lifetime());
+			streamerModeToggle->lifetime());
 	}
-
-	Core::App().settings().systemDarkModeValue(
-	) | rpl::start_with_next([=](std::optional<bool> darkMode) {
-		const auto darkModeEnabled
-			= Core::App().settings().systemDarkModeEnabled();
-		if (darkModeEnabled && darkMode.has_value()) {
-			_nightThemeSwitches.fire_copy(*darkMode);
-		}
-	}, _nightThemeToggle->lifetime());
 }
 
 void MainMenu::resizeEvent(QResizeEvent *e) {
@@ -972,11 +909,24 @@ void MainMenu::updateInnerControlsGeometry() {
 }
 
 void MainMenu::chooseEmojiStatus() {
-	if (const auto widget = _badge->widget()) {
+	if (_controller->showFrozenError()) {
+		return;
+	} else if (const auto widget = _badge->widget()) {
 		_emojiStatusPanel->show(_controller, widget, _badge->sizeTag());
 	} else {
 		ShowPremiumPreviewBox(_controller, PremiumFeature::EmojiStatus);
 	}
+}
+
+bool MainMenu::eventHook(QEvent *event) {
+	const auto type = event->type();
+	if (type == QEvent::TouchBegin
+		|| type == QEvent::TouchUpdate
+		|| type == QEvent::TouchEnd
+		|| type == QEvent::TouchCancel) {
+		QGuiApplication::sendEvent(_inner, event);
+	}
+	return RpWidget::eventHook(event);
 }
 
 void MainMenu::paintEvent(QPaintEvent *e) {
@@ -1076,6 +1026,81 @@ rpl::producer<OthersUnreadState> OtherAccountsUnreadState(
 		Core::App().unreadBadgeChanges()
 	) | rpl::map([=] {
 		return OtherAccountsUnreadStateCurrent(current);
+	});
+}
+
+base::EventFilterResult MainMenu::redirectToInnerChecked(not_null<QEvent*> e) {
+	if (_insideEventRedirect) {
+		return base::EventFilterResult::Continue;
+	}
+	const auto weak = Ui::MakeWeak(this);
+	_insideEventRedirect = true;
+	QGuiApplication::sendEvent(_inner, e);
+	if (weak) {
+		_insideEventRedirect = false;
+	}
+	return base::EventFilterResult::Cancel;
+}
+
+void MainMenu::setupSwipe() {
+	const auto outer = _controller->widget()->body();
+	base::install_event_filter(this, outer, [=](not_null<QEvent*> e) {
+		const auto type = e->type();
+		if (type == QEvent::TouchBegin
+			|| type == QEvent::TouchUpdate
+			|| type == QEvent::TouchEnd
+			|| type == QEvent::TouchCancel) {
+			return redirectToInnerChecked(e);
+		} else if (type == QEvent::Wheel) {
+			const auto w = static_cast<QWheelEvent*>(e.get());
+			const auto d = Ui::ScrollDeltaF(w);
+			if (std::abs(d.x()) > std::abs(d.y())) {
+				return redirectToInnerChecked(e);
+			}
+		}
+		return base::EventFilterResult::Continue;
+	});
+	const auto handles = outer->testAttribute(Qt::WA_AcceptTouchEvents);
+	if (!handles) {
+		outer->setAttribute(Qt::WA_AcceptTouchEvents);
+		lifetime().add([=] {
+			outer->setAttribute(Qt::WA_AcceptTouchEvents, false);
+		});
+	}
+
+	auto update = [=](Ui::Controls::SwipeContextData data) {
+		if (data.translation < 0) {
+			if (!_swipeBackData.callback) {
+				_swipeBackData = Ui::Controls::SetupSwipeBack(
+					this,
+					[=]() -> std::pair<QColor, QColor> {
+						return {
+							st::historyForwardChooseBg->c,
+							st::historyForwardChooseFg->c,
+						};
+					});
+			}
+			_swipeBackData.callback(data);
+			return;
+		} else if (_swipeBackData.lifetime) {
+			_swipeBackData = {};
+		}
+	};
+
+	auto init = [=](int, Qt::LayoutDirection direction) {
+		if (direction != Qt::LeftToRight) {
+			return Ui::Controls::SwipeHandlerFinishData();
+		}
+		return Ui::Controls::DefaultSwipeBackHandlerFinishData([=] {
+			closeLayer();
+		});
+	};
+
+	Ui::Controls::SetupSwipeHandler({
+		.widget = _inner,
+		.scroll = _scroll.data(),
+		.update = std::move(update),
+		.init = std::move(init),
 	});
 }
 

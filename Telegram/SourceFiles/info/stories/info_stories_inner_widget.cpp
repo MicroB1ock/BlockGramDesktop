@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_list_widget.h"
 #include "info/profile/info_profile_actions.h"
 #include "info/profile/info_profile_icon.h"
+#include "info/profile/info_profile_values.h"
 #include "info/profile/info_profile_widget.h"
 #include "info/stories/info_stories_widget.h"
 #include "info/info_controller.h"
@@ -134,8 +135,10 @@ void InnerWidget::createProfileTop() {
 	const auto peer = key.storiesPeer();
 
 	startTop();
-	Profile::AddCover(_top, _controller, peer, nullptr);
-	Profile::AddDetails(_top, _controller, peer, nullptr, { v::null });
+
+	using namespace Profile;
+	AddCover(_top, _controller, peer, nullptr, nullptr);
+	AddDetails(_top, _controller, peer, nullptr, nullptr, { v::null });
 
 	auto tracker = Ui::MultiSlideTracker();
 	const auto dividerWrap = _top->add(

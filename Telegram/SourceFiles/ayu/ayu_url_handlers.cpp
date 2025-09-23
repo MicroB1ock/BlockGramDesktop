@@ -20,6 +20,9 @@
 #include <QDesktopServices>
 
 #include "main/main_session.h"
+#include "ui/boxes/donate_info_box.h"
+#include "ui/settings/settings_main.h"
+#include "window/window_controller.h"
 
 namespace AyuUrlHandlers {
 
@@ -43,18 +46,20 @@ bool ResolveUser(
 		return true;
 	}
 
-	searchById(userId,
-			   &controller->session(),
-			   [=](const QString &title, UserData *data)
-			   {
-				   if (data) {
-					   controller->showPeerInfo(data);
-					   return;
-				   }
+	searchById(
+		userId,
+		&controller->session(),
+		[=](const QString &title, UserData *data)
+		{
+			if (data) {
+				controller->showPeerInfo(data);
+				return;
+			}
 
-				   Core::App().hideMediaView();
-				   Ui::show(Ui::MakeInformBox(tr::ayu_UserNotFoundMessage()));
-			   });
+			Core::App().hideMediaView();
+			Ui::show(Ui::MakeInformBox(tr::ayu_UserNotFoundMessage()));
+		}
+	);
 
 	return true;
 }
@@ -66,7 +71,40 @@ bool HandleAyu(
 	if (!controller) {
 		return false;
 	}
-	controller->showToast(QString(":3"), 500);
+
+	try {
+		const auto section = match->captured(1).mid(1).toLower();
+		const auto type = [&]() -> std::optional<::Settings::Type>
+		{
+			if (section == u"settings"_q || section == u"preferences"_q || section == u"prefs"_q) {
+				return ::Settings::AyuMain::Id();
+			}
+			return std::nullopt;
+		}();
+
+		if (type.has_value()) {
+			controller->showSettings(*type);
+			controller->window().activate();
+		} else {
+			controller->showToast(QString(":3"), 500);
+		}
+	} catch (...) {
+	}
+
+	return true;
+}
+
+bool HandleSupport(
+	Window::SessionController *controller,
+	const Match &match,
+	const QVariant &context) {
+	if (!controller) {
+		return false;
+	}
+	auto box = Box(
+		Ui::FillDonateInfoBox,
+		controller);
+	Ui::show(std::move(box));
 	return true;
 }
 

@@ -95,6 +95,13 @@ public:
 	[[nodiscard]] virtual QString generateShortName();
 	[[nodiscard]] virtual auto generatePaintUserpicCallback(
 		bool forceRound) -> PaintRoundImageCallback;
+	virtual void paintUserpicOverlay(
+		Painter &p,
+		const style::PeerListItem &st,
+		int x,
+		int y,
+		int outerWidth) {
+	}
 
 	[[nodiscard]] virtual auto generateNameFirstLetters() const
 		-> const base::flat_set<QChar> &;
@@ -1135,7 +1142,7 @@ public:
 	void peerListScrollToTop() override;
 	std::shared_ptr<Main::SessionShow> peerListUiShow() override;
 
-	void setAddedTopScrollSkip(int skip);
+	void setAddedTopScrollSkip(int skip, bool aboveSearch = false);
 
 	void showFinished() override;
 
@@ -1171,7 +1178,8 @@ private:
 		PaintRoundImageCallback paintUserpic,
 		anim::type animated);
 	void createMultiSelect();
-	int getTopScrollSkip() const;
+	[[nodiscard]] int topScrollSkip() const;
+	[[nodiscard]] int topSelectSkip() const;
 	void updateScrollSkips();
 	void searchQueryChanged(const QString &query);
 
@@ -1182,6 +1190,7 @@ private:
 	std::unique_ptr<PeerListController> _controller;
 	Fn<void(PeerListBox*)> _init;
 	bool _scrollBottomFixed = false;
+	bool _addedTopScrollAboveSearch = false;
 	int _addedTopScrollSkip = 0;
 
 };

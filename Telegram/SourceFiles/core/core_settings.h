@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/core_settings_proxy.h"
 #include "media/media_common.h"
+#include "dialogs/ui/dialogs_quick_action.h"
 #include "window/themes/window_themes_embedded.h"
 #include "ui/chat/attach/attach_send_files_way.h"
 #include "base/flags.h"
@@ -109,6 +110,11 @@ public:
 		WindowAndTray = 0,
 		TrayOnly = 1,
 		WindowOnly = 2,
+	};
+	enum class CloseBehavior {
+		Quit = 0,
+		CloseToTaskbar = 1,
+		RunInBackground = 2,
 	};
 
 	static constexpr auto kDefaultVolume = 0.9;
@@ -751,17 +757,11 @@ public:
 		_hiddenGroupCallTooltips |= value;
 	}
 
-	void setCloseToTaskbar(bool value) {
-		_closeToTaskbar = value;
+	void setCloseBehavior(CloseBehavior value) {
+		_closeBehavior = value;
 	}
-	[[nodiscard]] bool closeToTaskbar() const {
-		return _closeToTaskbar.current();
-	}
-	[[nodiscard]] rpl::producer<bool> closeToTaskbarValue() const {
-		return _closeToTaskbar.value();
-	}
-	[[nodiscard]] rpl::producer<bool> closeToTaskbarChanges() const {
-		return _closeToTaskbar.changes();
+	[[nodiscard]] CloseBehavior closeBehavior() const {
+		return _closeBehavior;
 	}
 	void setTrayIconMonochrome(bool value) {
 		_trayIconMonochrome = value;
@@ -953,6 +953,9 @@ public:
 	[[nodiscard]] static PlaybackSpeed DeserializePlaybackSpeed(
 		qint32 speed);
 
+	[[nodiscard]] Dialogs::Ui::QuickDialogAction quickDialogAction() const;
+	void setQuickDialogAction(Dialogs::Ui::QuickDialogAction);
+
 	void resetOnLastLogout();
 
 private:
@@ -1048,7 +1051,7 @@ private:
 	bool _disableOpenGL = false;
 	rpl::variable<WorkMode> _workMode = WorkMode::WindowAndTray;
 	base::flags<Calls::Group::StickedTooltip> _hiddenGroupCallTooltips;
-	rpl::variable<bool> _closeToTaskbar = false;
+	CloseBehavior _closeBehavior = CloseBehavior::Quit;
 	rpl::variable<bool> _trayIconMonochrome = true;
 	rpl::variable<QString> _customDeviceModel;
 	rpl::variable<Media::RepeatMode> _playerRepeatMode;
@@ -1092,6 +1095,9 @@ private:
 	bool _dialogsWidthSetToZeroWithoutChat = false;
 
 	bool _recordVideoMessages = false;
+
+	Dialogs::Ui::QuickDialogAction _quickDialogAction
+		= Dialogs::Ui::QuickDialogAction::Disabled;
 
 	QByteArray _photoEditorBrush;
 

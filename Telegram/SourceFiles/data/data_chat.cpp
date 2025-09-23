@@ -64,6 +64,10 @@ ChatAdminRightsInfo ChatData::defaultAdminRights(not_null<UserData*> user) {
 		| (isCreator ? Flag::AddAdmins : Flag(0)));
 }
 
+bool ChatData::isAyuNoForwards() const {
+	return flags() & Flag::AyuNoForwards;
+}
+
 bool ChatData::allowsForwarding() const {
 	return !(flags() & Flag::NoForwards);
 }
@@ -234,10 +238,13 @@ void ChatData::setGroupCall(
 			data.vid().v,
 			data.vaccess_hash().v,
 			scheduleDate,
-			rtmp);
+			rtmp,
+			false); // conference
 		owner().registerGroupCall(_call.get());
 		session().changes().peerUpdated(this, UpdateFlag::GroupCall);
 		addFlags(Flag::CallActive);
+	}, [&](const auto &) {
+		clearGroupCall();
 	});
 }
 

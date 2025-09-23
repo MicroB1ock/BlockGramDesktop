@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/notify/data_notify_settings.h"
 #include "data/stickers/data_stickers.h"
 #include "data/data_drafts.h"
+#include "data/data_saved_messages.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_media_types.h"
@@ -33,6 +34,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_chat_filters.h"
 #include "data/data_send_action.h"
+#include "data/data_star_gift.h"
+#include "data/data_emoji_statuses.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
@@ -43,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_histories.h"
 #include "data/data_history_messages.h"
+#include "data/data_todo_list.h"
 #include "lang/lang_keys.h"
 #include "apiwrap.h"
 #include "api/api_chat_participants.h"
@@ -88,12 +92,9 @@ using UpdateFlag = Data::HistoryUpdate::Flag;
 
 [[nodiscard]] Dialogs::UnreadState AdjustedForumUnreadState(
 		Dialogs::UnreadState state) {
-	if (state.chatsTopic) {
-		state.forums = 1;
-		if (state.chatsTopic == state.chatsTopicMuted) {
-			state.forumsMuted = 1;
-		}
-	}
+	const auto allMuted = (state.chats == state.chatsMuted);
+	state.chatsMuted = (state.chats && allMuted) ? 1 : 0;
+	state.chats = state.chats ? 1 : 0;
 	return state;
 }
 
@@ -143,6 +144,10 @@ void History::setHasPendingResizedItems() {
 void History::itemRemoved(not_null<HistoryItem*> item) {
 	if (item == _joinedMessage) {
 		_joinedMessage = nullptr;
+	} else if (item == _newPeerNameChange) {
+		_newPeerNameChange = nullptr;
+	} else if (item == _newPeerPhotoChange) {
+		_newPeerPhotoChange = nullptr;
 	}
 	item->removeMainView();
 	if (_lastServerMessage == item) {
@@ -163,6 +168,9 @@ void History::itemRemoved(not_null<HistoryItem*> item) {
 	}
 	if (const auto topic = item->topic()) {
 		topic->applyItemRemoved(item->id);
+	}
+	if (const auto sublist = item->savedSublist()) {
+		sublist->applyItemRemoved(item->id);
 	}
 	if (const auto chat = peer->asChat()) {
 		if (const auto to = chat->getMigrateToChannel()) {
@@ -192,10 +200,10 @@ void History::itemVanished(not_null<HistoryItem*> item) {
 		setUnreadCount(unreadCount() - 1);
 	}
 	if (const auto media = item->media()) {
-		if (const auto gift = media->gift()) {
+		if (media->gift()) {
 			using GiftAction = Data::GiftUpdate::Action;
 			owner().notifyGiftUpdate({
-				.itemId = item->fullId(),
+				.id = Data::SavedStarGiftId::User(item->id),
 				.action = GiftAction::Delete,
 			});
 		}
@@ -204,33 +212,42 @@ void History::itemVanished(not_null<HistoryItem*> item) {
 
 void History::takeLocalDraft(not_null<History*> from) {
 	const auto topicRootId = MsgId(0);
-	const auto i = from->_drafts.find(Data::DraftKey::Local(topicRootId));
+	const auto monoforumPeerId = PeerId(0);
+	const auto i = from->_drafts.find(
+		Data::DraftKey::Local(topicRootId, monoforumPeerId));
 	if (i == end(from->_drafts)) {
 		return;
 	}
 	auto &draft = i->second;
 	if (!draft->textWithTags.text.isEmpty()
-		&& !_drafts.contains(Data::DraftKey::Local(topicRootId))) {
+		&& !_drafts.contains(
+			Data::DraftKey::Local(topicRootId, monoforumPeerId))) {
 		// Edit and reply to drafts can't migrate.
 		// Cloud drafts do not migrate automatically.
 		draft->reply = FullReplyTo();
 		setLocalDraft(std::move(draft));
 	}
-	from->clearLocalDraft(topicRootId);
+	from->clearLocalDraft(topicRootId, monoforumPeerId);
 	session().api().saveDraftToCloudDelayed(from);
 }
 
-void History::createLocalDraftFromCloud(MsgId topicRootId) {
-	const auto draft = cloudDraft(topicRootId);
+void History::createLocalDraftFromCloud(
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	const auto draft = cloudDraft(topicRootId, monoforumPeerId);
 	if (!draft) {
-		clearLocalDraft(topicRootId);
+		clearLocalDraft(topicRootId, monoforumPeerId);
 		return;
 	} else if (Data::DraftIsNull(draft) || !draft->date) {
 		return;
 	}
 
 	draft->reply.topicRootId = topicRootId;
-	auto existing = localDraft(topicRootId);
+	draft->reply.monoforumPeerId = monoforumPeerId;
+	if (!suggestDraftAllowed()) {
+		draft->suggest = SuggestPostOptions();
+	}
+	auto existing = localDraft(topicRootId, monoforumPeerId);
 	if (Data::DraftIsNull(existing)
 		|| !existing->date
 		|| draft->date >= existing->date) {
@@ -238,12 +255,14 @@ void History::createLocalDraftFromCloud(MsgId topicRootId) {
 			setLocalDraft(std::make_unique<Data::Draft>(
 				draft->textWithTags,
 				draft->reply,
+				draft->suggest,
 				draft->cursor,
 				draft->webpage));
-			existing = localDraft(topicRootId);
+			existing = localDraft(topicRootId, monoforumPeerId);
 		} else if (existing != draft) {
 			existing->textWithTags = draft->textWithTags;
 			existing->reply = draft->reply;
+			existing->suggest = draft->suggest;
 			existing->cursor = draft->cursor;
 			existing->webpage = draft->webpage;
 		}
@@ -266,7 +285,7 @@ void History::setDraft(
 		return;
 	}
 	const auto cloudThread = key.isCloud()
-		? threadFor(key.topicRootId())
+		? threadFor(key.topicRootId(), key.monoforumPeerId())
 		: nullptr;
 	if (cloudThread) {
 		cloudThread->cloudDraftTextCache().clear();
@@ -296,7 +315,7 @@ void History::clearDraft(Data::DraftKey key) {
 void History::clearDrafts() {
 	for (auto &[key, draft] : base::take(_drafts)) {
 		const auto cloudThread = key.isCloud()
-			? threadFor(key.topicRootId())
+			? threadFor(key.topicRootId(), key.monoforumPeerId())
 			: nullptr;
 		if (cloudThread) {
 			cloudThread->cloudDraftTextCache().clear();
@@ -307,96 +326,125 @@ void History::clearDrafts() {
 
 Data::Draft *History::createCloudDraft(
 		MsgId topicRootId,
+		PeerId monoforumPeerId,
 		const Data::Draft *fromDraft) {
 	if (Data::DraftIsNull(fromDraft)) {
 		setCloudDraft(std::make_unique<Data::Draft>(
 			TextWithTags(),
-			FullReplyTo{ .topicRootId = topicRootId },
+			FullReplyTo{
+				.topicRootId = topicRootId,
+				.monoforumPeerId = monoforumPeerId,
+			},
+			SuggestPostOptions(),
 			MessageCursor(),
 			Data::WebPageDraft()));
-		cloudDraft(topicRootId)->date = TimeId(0);
+		cloudDraft(topicRootId, monoforumPeerId)->date = TimeId(0);
 	} else {
-		auto existing = cloudDraft(topicRootId);
+		auto existing = cloudDraft(topicRootId, monoforumPeerId);
 		if (!existing) {
 			auto reply = fromDraft->reply;
 			reply.topicRootId = topicRootId;
+			reply.monoforumPeerId = monoforumPeerId;
 			setCloudDraft(std::make_unique<Data::Draft>(
 				fromDraft->textWithTags,
 				reply,
+				fromDraft->suggest,
 				fromDraft->cursor,
 				fromDraft->webpage));
-			existing = cloudDraft(topicRootId);
+			existing = cloudDraft(topicRootId, monoforumPeerId);
 		} else if (existing != fromDraft) {
 			existing->textWithTags = fromDraft->textWithTags;
 			existing->reply = fromDraft->reply;
+			existing->suggest = fromDraft->suggest;
 			existing->cursor = fromDraft->cursor;
 			existing->webpage = fromDraft->webpage;
 		}
 		existing->date = base::unixtime::now();
 		existing->reply.topicRootId = topicRootId;
+		existing->reply.monoforumPeerId = monoforumPeerId;
+		if (!suggestDraftAllowed()) {
+			existing->suggest = SuggestPostOptions();
+		}
 	}
 
-	if (const auto thread = threadFor(topicRootId)) {
+	if (const auto thread = threadFor(topicRootId, monoforumPeerId)) {
 		thread->cloudDraftTextCache().clear();
 		thread->updateChatListSortPosition();
 	}
 
-	return cloudDraft(topicRootId);
+	return cloudDraft(topicRootId, monoforumPeerId);
 }
 
-bool History::skipCloudDraftUpdate(MsgId topicRootId, TimeId date) const {
-	const auto i = _acceptCloudDraftsAfter.find(topicRootId);
-	return _savingCloudDraftRequests.contains(topicRootId)
+bool History::skipCloudDraftUpdate(
+		MsgId topicRootId,
+		PeerId monoforumPeerId,
+		TimeId date) const {
+	const auto key = Data::DraftKey::Local(topicRootId, monoforumPeerId);
+	const auto i = _acceptCloudDraftsAfter.find(key);
+	return _savingCloudDraftRequests.contains(key)
 		|| (i != _acceptCloudDraftsAfter.end() && date < i->second);
 }
 
-void History::startSavingCloudDraft(MsgId topicRootId) {
-	++_savingCloudDraftRequests[topicRootId];
+void History::startSavingCloudDraft(
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	const auto key = Data::DraftKey::Local(topicRootId, monoforumPeerId);
+	++_savingCloudDraftRequests[key];
 }
 
-void History::finishSavingCloudDraft(MsgId topicRootId, TimeId savedAt) {
-	const auto i = _savingCloudDraftRequests.find(topicRootId);
+void History::finishSavingCloudDraft(
+		MsgId topicRootId,
+		PeerId monoforumPeerId,
+		TimeId savedAt) {
+	const auto key = Data::DraftKey::Local(topicRootId, monoforumPeerId);
+	const auto i = _savingCloudDraftRequests.find(key);
 	if (i != _savingCloudDraftRequests.end()) {
 		if (--i->second <= 0) {
 			_savingCloudDraftRequests.erase(i);
 		}
 	}
-	auto &after = _acceptCloudDraftsAfter[topicRootId];
+	auto &after = _acceptCloudDraftsAfter[key];
 	after = std::max(after, savedAt + kSkipCloudDraftsFor);
 }
 
-void History::applyCloudDraft(MsgId topicRootId) {
+void History::applyCloudDraft(MsgId topicRootId, PeerId monoforumPeerId) {
 	if (!topicRootId && session().supportMode()) {
 		updateChatListEntry();
 		session().supportHelper().cloudDraftChanged(this);
 	} else {
-		createLocalDraftFromCloud(topicRootId);
-		if (const auto thread = threadFor(topicRootId)) {
+		createLocalDraftFromCloud(topicRootId, monoforumPeerId);
+		if (const auto thread = threadFor(topicRootId, monoforumPeerId)) {
 			thread->updateChatListSortPosition();
-			if (!topicRootId) {
-				session().changes().historyUpdated(
-					this,
-					UpdateFlag::CloudDraft);
-			} else {
+			if (topicRootId) {
 				session().changes().topicUpdated(
 					thread->asTopic(),
 					Data::TopicUpdate::Flag::CloudDraft);
+			} else if (monoforumPeerId) {
+				session().changes().sublistUpdated(
+					thread->asSublist(),
+					Data::SublistUpdate::Flag::CloudDraft);
+			} else {
+				session().changes().historyUpdated(
+					this,
+					UpdateFlag::CloudDraft);
 			}
 		}
 	}
 }
 
-void History::draftSavedToCloud(MsgId topicRootId) {
-	if (const auto thread = threadFor(topicRootId)) {
+void History::draftSavedToCloud(MsgId topicRootId, PeerId monoforumPeerId) {
+	if (const auto thread = threadFor(topicRootId, monoforumPeerId)) {
 		thread->updateChatListEntry();
 	}
 	session().local().writeDrafts(this);
 }
 
 const Data::ForwardDraft &History::forwardDraft(
-		MsgId topicRootId) const {
+		MsgId topicRootId,
+		PeerId monoforumPeerId) const {
+	const auto key = Data::DraftKey::Local(topicRootId, monoforumPeerId);
 	static const auto kEmpty = Data::ForwardDraft();
-	const auto i = _forwardDrafts.find(topicRootId);
+	const auto i = _forwardDrafts.find(key);
 	return (i != end(_forwardDrafts)) ? i->second : kEmpty;
 }
 
@@ -409,11 +457,12 @@ Data::ResolvedForwardDraft History::resolveForwardDraft(
 }
 
 Data::ResolvedForwardDraft History::resolveForwardDraft(
-		MsgId topicRootId) {
-	const auto &draft = forwardDraft(topicRootId);
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	const auto &draft = forwardDraft(topicRootId, monoforumPeerId);
 	auto result = resolveForwardDraft(draft);
 	if (result.items.size() != draft.ids.size()) {
-		setForwardDraft(topicRootId, {
+		setForwardDraft(topicRootId, monoforumPeerId, {
 			.ids = owner().itemsToIds(result.items),
 			.options = result.options,
 		});
@@ -423,24 +472,23 @@ Data::ResolvedForwardDraft History::resolveForwardDraft(
 
 void History::setForwardDraft(
 		MsgId topicRootId,
+		PeerId monoforumPeerId,
 		Data::ForwardDraft &&draft) {
 	auto changed = false;
+	const auto key = Data::DraftKey::Local(topicRootId, monoforumPeerId);
 	if (draft.ids.empty()) {
-		changed = _forwardDrafts.remove(topicRootId);
+		changed = _forwardDrafts.remove(key);
 	} else {
-		auto &now = _forwardDrafts[topicRootId];
+		auto &now = _forwardDrafts[key];
 		if (now != draft) {
 			now = std::move(draft);
 			changed = true;
 		}
 	}
 	if (changed) {
-		const auto entry = topicRootId
-			? peer->forumTopicFor(topicRootId)
-			: (Dialogs::Entry*)this;
-		if (entry) {
+		if (const auto thread = threadFor(topicRootId, monoforumPeerId)) {
 			session().changes().entryUpdated(
-				entry,
+				thread,
 				Data::EntryUpdate::Flag::ForwardDraft);
 		}
 	}
@@ -466,6 +514,9 @@ not_null<HistoryItem*> History::createItem(
 	});
 	if (newMessage && result->out() && result->isRegular()) {
 		session().topPeers().increment(peer, result->date());
+		if (result->starsPaid()) {
+			session().credits().load(true);
+		}
 	}
 	return result;
 }
@@ -608,8 +659,52 @@ void History::destroyMessagesByTopic(MsgId topicRootId) {
 	}
 }
 
-void History::unpinMessagesFor(MsgId topicRootId) {
-	if (!topicRootId) {
+void History::destroyMessagesBySublist(not_null<PeerData*> sublistPeer) {
+	auto toDestroy = std::vector<not_null<HistoryItem*>>();
+	toDestroy.reserve(_items.size());
+	const auto peerId = sublistPeer->id;
+	for (const auto &message : _items) {
+		if (message->sublistPeerId() == peerId) {
+			toDestroy.push_back(message.get());
+		}
+	}
+	for (const auto item : toDestroy) {
+		item->destroy();
+	}
+}
+
+void History::unpinMessagesFor(MsgId topicRootId, PeerId monoforumPeerId) {
+	if (topicRootId) {
+		session().storage().remove(
+			Storage::SharedMediaRemoveAll(
+				peer->id,
+				topicRootId,
+				Storage::SharedMediaType::Pinned));
+		if (const auto topic = peer->forumTopicFor(topicRootId)) {
+			topic->setHasPinnedMessages(false);
+		}
+		for (const auto &item : _items) {
+			if (item->isPinned() && item->topicRootId() == topicRootId) {
+				item->setIsPinned(false);
+			}
+		}
+	} else if (monoforumPeerId) {
+		session().storage().remove(
+			Storage::SharedMediaRemoveAll(
+				peer->id,
+				monoforumPeerId,
+				Storage::SharedMediaType::Pinned));
+		if (const auto sublist = peer->monoforumSublistFor(
+				monoforumPeerId)) {
+			sublist->setHasPinnedMessages(false);
+		}
+		for (const auto &item : _items) {
+			if (item->isPinned()
+				&& item->sublistPeerId() == monoforumPeerId) {
+				item->setIsPinned(false);
+			}
+		}
+	} else {
 		session().storage().remove(
 			Storage::SharedMediaRemoveAll(
 				peer->id,
@@ -622,20 +717,6 @@ void History::unpinMessagesFor(MsgId topicRootId) {
 		}
 		for (const auto &item : _items) {
 			if (item->isPinned()) {
-				item->setIsPinned(false);
-			}
-		}
-	} else {
-		session().storage().remove(
-			Storage::SharedMediaRemoveAll(
-				peer->id,
-				topicRootId,
-				Storage::SharedMediaType::Pinned));
-		if (const auto topic = peer->forumTopicFor(topicRootId)) {
-			topic->setHasPinnedMessages(false);
-		}
-		for (const auto &item : _items) {
-			if (item->isPinned() && item->topicRootId() == topicRootId) {
 				item->setIsPinned(false);
 			}
 		}
@@ -793,11 +874,19 @@ void History::clearUnreadMentionsFor(MsgId topicRootId) {
 	}
 }
 
-void History::clearUnreadReactionsFor(MsgId topicRootId) {
+void History::clearUnreadReactionsFor(
+		MsgId topicRootId,
+		Data::SavedSublist *sublist) {
 	const auto forum = peer->forum();
-	if (!topicRootId) {
+	const auto monoforum = peer->monoforum();
+	const auto sublistPeerId = sublist ? sublist->sublistPeer()->id : 0;
+	if ((!topicRootId && !sublist)
+		|| (!topicRootId && forum)
+		|| (!sublist && monoforum)) {
 		if (forum) {
 			forum->clearAllUnreadReactions();
+		} else if (monoforum) {
+			monoforum->clearAllUnreadReactions();
 		}
 		unreadReactions().clear();
 		return;
@@ -805,6 +894,8 @@ void History::clearUnreadReactionsFor(MsgId topicRootId) {
 		if (const auto topic = forum->topicFor(topicRootId)) {
 			topic->unreadReactions().clear();
 		}
+	} else if (monoforum) {
+		sublist->unreadReactions().clear();
 	}
 	const auto &ids = unreadReactionsIds();
 	if (ids.empty()) {
@@ -816,7 +907,8 @@ void History::clearUnreadReactionsFor(MsgId topicRootId) {
 	items.reserve(ids.size());
 	for (const auto &id : ids) {
 		if (const auto item = owner->message(peerId, id)) {
-			if (item->topicRootId() == topicRootId) {
+			if ((topicRootId && item->topicRootId() == topicRootId)
+				|| (sublist && item->sublistPeerId() == sublistPeerId)) {
 				items.emplace(id);
 			}
 		}
@@ -844,6 +936,7 @@ not_null<HistoryItem*> History::addNewToBack(
 			storage.add(Storage::SharedMediaAddExisting(
 				peer->id,
 				MsgId(0), // topicRootId
+				PeerId(0), // monoforumPeerId
 				types,
 				item->id,
 				{ from, till }));
@@ -855,11 +948,24 @@ not_null<HistoryItem*> History::addNewToBack(
 				storage.add(Storage::SharedMediaAddExisting(
 					peer->id,
 					topic->rootId(),
+					PeerId(), // monoforumPeerId
 					types,
 					item->id,
 					{ item->id, item->id}));
 				if (pinned) {
 					topic->setHasPinnedMessages(true);
+				}
+			}
+			if (const auto sublist = item->savedSublist()) {
+				storage.add(Storage::SharedMediaAddExisting(
+					peer->id,
+					MsgId(), // topicRootId
+					item->sublistPeerId(),
+					types,
+					item->id,
+					{ item->id, item->id }));
+				if (pinned) {
+					sublist->setHasPinnedMessages(true);
 				}
 			}
 		}
@@ -1128,7 +1234,8 @@ void History::applyServiceChanges(
 				if (id && item) {
 					session().storage().add(Storage::SharedMediaAddSlice(
 						peer->id,
-						MsgId(0),
+						MsgId(0), // topicRootId
+						PeerId(0), // monoforumPeerId
 						Storage::SharedMediaType::Pinned,
 						{ id },
 						{ id, ServerMaxMsgId }));
@@ -1137,10 +1244,21 @@ void History::applyServiceChanges(
 						session().storage().add(Storage::SharedMediaAddSlice(
 							peer->id,
 							topic->rootId(),
+							PeerId(), // monoforumPeerId
 							Storage::SharedMediaType::Pinned,
 							{ id },
 							{ id, ServerMaxMsgId }));
 						topic->setHasPinnedMessages(true);
+					}
+					if (const auto sublist = item->savedSublist()) {
+						session().storage().add(Storage::SharedMediaAddSlice(
+							peer->id,
+							MsgId(), // topicRootId
+							item->sublistPeerId(),
+							Storage::SharedMediaType::Pinned,
+							{ id },
+							{ id, ServerMaxMsgId }));
+						sublist->setHasPinnedMessages(true);
 					}
 				}
 			}, [&](const MTPDmessageReplyStoryHeader &data) {
@@ -1164,7 +1282,7 @@ void History::applyServiceChanges(
 			auto paid = std::optional<Payments::PaidInvoice>();
 			if (const auto message = payment->msg) {
 				if (const auto media = message->media()) {
-					if (const auto invoice = media->invoice()) {
+					if (media->invoice()) {
 						paid = Payments::CheckoutProcess::InvoicePaid(
 							message);
 					}
@@ -1177,12 +1295,6 @@ void History::applyServiceChanges(
 			}
 			if (paid) {
 				// Toast on a current active window.
-				const auto context = [=](not_null<QWidget*> toast) {
-					return Core::MarkedTextContext{
-						.session = &session(),
-						.customEmojiRepaint = [=] { toast->update(); },
-					};
-				};
 				Ui::Toast::Show({
 					.text = tr::lng_payments_success(
 						tr::now,
@@ -1193,7 +1305,9 @@ void History::applyServiceChanges(
 						lt_title,
 						Ui::Text::Bold(paid->title),
 						Ui::Text::WithEntities),
-					.textContext = context,
+					.textContext = Core::TextContext({
+						.session = &session(),
+					}),
 				});
 			}
 		}
@@ -1233,6 +1347,34 @@ void History::applyServiceChanges(
 				topic->setHidden(mtpIsTrue(*hidden));
 			}
 		}
+	}, [&](const MTPDmessageActionConferenceCall &data) {
+		if (!data.is_active() && !data.is_missed() && !item->out()) {
+			if (const auto user = item->history()->peer->asUser()) {
+				Core::App().calls().showConferenceInvite(user, item->id);
+			}
+		}
+	}, [&](const MTPDmessageActionTodoCompletions &data) {
+		if (const auto done = item->Get<HistoryServiceTodoCompletions>()) {
+			const auto list = done->msg
+				? done->msg
+				: owner().message(peer, done->msgId);
+			if (const auto media = list ? list->media() : nullptr) {
+				if (const auto todolist = media->todolist()) {
+					todolist->apply(item, data);
+				}
+			}
+		}
+	}, [&](const MTPDmessageActionTodoAppendTasks &data) {
+		if (const auto done = item->Get<HistoryServiceTodoCompletions>()) {
+			const auto list = done->msg
+				? done->msg
+				: owner().message(peer, done->msgId);
+			if (const auto media = list ? list->media() : nullptr) {
+				if (const auto todolist = media->todolist()) {
+					todolist->apply(data);
+				}
+			}
+		}
 	}, [](const auto &) {
 	});
 }
@@ -1241,6 +1383,8 @@ void History::mainViewRemoved(
 		not_null<HistoryBlock*> block,
 		not_null<HistoryView::Element*> view) {
 	Expects(_joinedMessage != view->data());
+	Expects(_newPeerNameChange != view->data());
+	Expects(_newPeerPhotoChange != view->data());
 
 	if (_firstUnreadView == view) {
 		getNextFirstUnreadMessage();
@@ -1309,6 +1453,18 @@ void History::newItemAdded(not_null<HistoryItem*> item) {
 	}
 	if (const auto topic = item->topic()) {
 		topic->applyItemAdded(item);
+	}
+	if (const auto sublist = item->savedSublist()) {
+		sublist->applyItemAdded(item);
+	}
+	if (const auto media = item->media()) {
+		if (const auto gift = media->gift()) {
+			if (const auto unique = gift->unique.get()) {
+				if (unique->ownerId == session().userPeerId()) {
+					owner().emojiStatuses().refreshCollectibles();
+				}
+			}
+		}
 	}
 }
 
@@ -1400,6 +1556,7 @@ void History::addEdgesToSharedMedia() {
 		session().storage().add(Storage::SharedMediaAddSlice(
 			peer->id,
 			MsgId(0), // topicRootId
+			PeerId(0), // monoforumPeerId
 			type,
 			{},
 			{ from, till }));
@@ -1613,6 +1770,7 @@ void History::addToSharedMedia(
 			session().storage().add(Storage::SharedMediaAddSlice(
 				peer->id,
 				MsgId(0), // topicRootId
+				PeerId(0), // monoforumPeerId
 				type,
 				std::move(medias[i]),
 				{ from, till }));
@@ -2065,7 +2223,7 @@ void History::applyPinnedUpdate(const MTPDupdateDialogPinned &data) {
 
 TimeId History::adjustedChatListTimeId() const {
 	const auto result = chatListTimeId();
-	if (const auto draft = cloudDraft(MsgId(0))) {
+	if (const auto draft = cloudDraft(MsgId(), PeerId())) {
 		if (!peer->forum()
 			&& !Data::DraftIsNull(draft)
 			&& !session().supportMode()) {
@@ -2220,6 +2378,9 @@ History *History::migrateSibling() const {
 Dialogs::UnreadState History::chatListUnreadState() const {
 	if (const auto forum = peer->forum()) {
 		return AdjustedForumUnreadState(forum->topicsList()->unreadState());
+	} else if (const auto monoforum = peer->monoforum()) {
+		return AdjustedForumUnreadState(
+			withMyMuted(monoforum->chatsList()->unreadState()));;
 	}
 	return computeUnreadState();
 }
@@ -2228,9 +2389,15 @@ Dialogs::BadgesState History::chatListBadgesState() const {
 	if (const auto forum = peer->forum()) {
 		return adjustBadgesStateByFolder(
 			Dialogs::BadgesForUnread(
-				AdjustedForumUnreadState(forum->topicsList()->unreadState()),
+				forum->topicsList()->unreadState(),
 				Dialogs::CountInBadge::Chats,
 				Dialogs::IncludeInBadge::UnmutedOrAll));
+	} else if (const auto monoforum = peer->monoforum()) {
+		return adjustBadgesStateByFolder(
+			Dialogs::BadgesForUnread(
+				withMyMuted(monoforum->chatsList()->unreadState()),
+				Dialogs::CountInBadge::Chats,
+				Dialogs::IncludeInBadge::All));
 	}
 	return computeBadgesState();
 }
@@ -2260,13 +2427,27 @@ Dialogs::UnreadState History::computeUnreadState() const {
 	result.chats = count ? 1 : 0;
 	result.marks = mark ? 1 : 0;
 	result.mentions = unreadMentions().has() ? 1 : 0;
-	result.reactions = unreadReactions().has() ? 1 : 0;
+	const auto peer = this->peer.get();
+	const auto &settings = AyuSettings::getInstance();
+	const auto hideReactions = (peer->isChannel() && !peer->isMegagroup() && !settings.showChannelReactions)
+		|| (peer->isMegagroup() && !settings.showGroupReactions);
+	result.reactions = hideReactions ? 0 : (unreadReactions().has() ? 1 : 0);
 	result.messagesMuted = muted ? result.messages : 0;
 	result.chatsMuted = muted ? result.chats : 0;
 	result.marksMuted = muted ? result.marks : 0;
 	result.reactionsMuted = muted ? result.reactions : 0;
 	result.known = _unreadCount.has_value();
 	return result;
+}
+
+Dialogs::UnreadState History::withMyMuted(Dialogs::UnreadState state) const {
+	if (muted()) {
+		state.chatsMuted = state.chats;
+		state.marksMuted = state.marks;
+		state.messagesMuted = state.messages;
+		state.reactionsMuted = state.reactions;
+	}
+	return state;
 }
 
 void History::allowChatListMessageResolve() {
@@ -2316,6 +2497,9 @@ bool History::chatListMessageKnown() const {
 }
 
 const QString &History::chatListName() const {
+	if (const auto broadcast = peer->monoforumBroadcast()) {
+		return broadcast->name();
+	}
 	return peer->name();
 }
 
@@ -2552,7 +2736,7 @@ auto History::computeChatListMessageFromLast() const
 	if (!last || !last->isGroupMigrate()) {
 		return _lastMessage;
 	}
-	if (const auto chat = peer->asChat()) {
+	if (peer->isChat()) {
 		// In chats we try to take the item before the 'last', which
 		// is the empty-displayed migration message.
 		if (!loadedAtBottom()) {
@@ -2630,7 +2814,7 @@ void History::setFakeChatListMessage() {
 			}
 		}
 		return;
-	} else if (const auto chat = peer->asChat()) {
+	} else if (peer->isChat()) {
 		// In chats we try to take the item before the 'last', which
 		// is the empty-displayed migration message.
 		owner().histories().requestFakeChatListMessage(this);
@@ -2846,7 +3030,8 @@ void History::applyDialog(
 		Data::ApplyPeerCloudDraft(
 			&session(),
 			peer->id,
-			MsgId(0), // topicRootId
+			MsgId(), // topicRootId
+			PeerId(), // monoforumPeerId
 			draft->c_draftMessage());
 	}
 	if (const auto ttl = data.vttl_period()) {
@@ -2868,15 +3053,13 @@ void History::dialogEntryApplied() {
 		return;
 	}
 	if (!chatListMessage()) {
-		clear(ClearType::Unload);
+		clear(ClearType::Unload, true);
 		addNewerSlice(QVector<MTPMessage>());
 		addOlderSlice(QVector<MTPMessage>());
 		if (const auto channel = peer->asChannel()) {
 			const auto inviter = channel->inviter;
-			if (inviter && channel->amIn()) {
-				if (const auto from = owner().userLoaded(inviter)) {
-					insertJoinedMessage();
-				}
+			if (inviter && channel->amIn() && owner().userLoaded(inviter)) {
+				insertJoinedMessage();
 			}
 		}
 		return;
@@ -2887,10 +3070,9 @@ void History::dialogEntryApplied() {
 			const auto inviter = channel->inviter;
 			if (inviter
 				&& chatListTimeId() <= channel->inviteDate
-				&& channel->amIn()) {
-				if (const auto from = owner().userLoaded(inviter)) {
-					insertJoinedMessage();
-				}
+				&& channel->amIn()
+				&& owner().userLoaded(inviter)) {
+				insertJoinedMessage();
 			}
 		}
 	}
@@ -2984,8 +3166,70 @@ void History::applyDialogTopMessage(MsgId topMessageId) {
 	}
 }
 
+void History::tryMarkMonoforumIntervalRead(
+		MsgId wasInboxReadBefore,
+		MsgId nowInboxReadBefore) {
+	if (!amMonoforumAdmin() || (nowInboxReadBefore <= wasInboxReadBefore)) {
+		return;
+	} else if (loadedAtBottom() && nowInboxReadBefore >= minMsgId()) {
+		// Count for each sublist how many messages are still not read.
+		auto counts = base::flat_map<not_null<Data::SavedSublist*>, int>();
+		for (const auto &block : blocks) {
+			for (const auto &message : block->messages) {
+				const auto item = message->data();
+				if (!item->isRegular() || item->id < nowInboxReadBefore) {
+					continue;
+				}
+				if (const auto sublist = item->savedSublist()) {
+					++counts[sublist];
+				}
+			}
+		}
+		if (const auto monoforum = peer->monoforum()) {
+			monoforum->updateUnreadCounts(nowInboxReadBefore - 1, counts);
+		}
+	} else if (minMsgId() <= wasInboxReadBefore
+		&& maxMsgId() >= nowInboxReadBefore) {
+		// Count for each sublist how many messages were read.
+		for (const auto &block : blocks) {
+			for (const auto &message : block->messages) {
+				const auto item = message->data();
+				if (!item->isRegular() || item->id < wasInboxReadBefore) {
+					continue;
+				} else if (item->id >= nowInboxReadBefore) {
+					break;
+				}
+				if (const auto sublist = item->savedSublist()) {
+					const auto unread = sublist->unreadCountCurrent();
+					if (unread > 0) {
+						sublist->setInboxReadTill(item->id, unread - 1);
+					}
+				}
+			}
+		}
+	} else {
+		// We can't invalidate sublist unread counts here, because no read
+		// request was yet sent to the server (so it can't return correct
+		// values yet), we need to do that after we send read request.
+		_flags |= Flag::MonoforumUnreadInvalidatePending;
+	}
+}
+
+void History::validateMonoforumUnread(MsgId readTillId) {
+	if (!(_flags & Flag::MonoforumUnreadInvalidatePending)) {
+		return;
+	}
+	_flags &= ~Flag::MonoforumUnreadInvalidatePending;
+	if (!amMonoforumAdmin()) {
+		return;
+	} else if (const auto monoforum = peer->monoforum()) {
+		monoforum->markUnreadCountsUnknown(readTillId);
+	}
+}
+
 void History::setInboxReadTill(MsgId upTo) {
 	if (_inboxReadBefore) {
+		tryMarkMonoforumIntervalRead(*_inboxReadBefore, upTo + 1);
 		accumulate_max(*_inboxReadBefore, upTo + 1);
 	} else {
 		_inboxReadBefore = upTo + 1;
@@ -3079,14 +3323,20 @@ void History::forceFullResize() {
 	_flags |= Flag::HasPendingResizedItems;
 }
 
-Data::Thread *History::threadFor(MsgId topicRootId) {
+Data::Thread *History::threadFor(MsgId topicRootId, PeerId monoforumPeerId) {
 	return topicRootId
 		? peer->forumTopicFor(topicRootId)
+		: monoforumPeerId
+		? peer->monoforumSublistFor(monoforumPeerId)
 		: static_cast<Data::Thread*>(this);
 }
 
-const Data::Thread *History::threadFor(MsgId topicRootId) const {
-	return const_cast<History*>(this)->threadFor(topicRootId);
+const Data::Thread *History::threadFor(
+		MsgId topicRootId,
+		PeerId monoforumPeerId) const {
+	return const_cast<History*>(this)->threadFor(
+		topicRootId,
+		monoforumPeerId);
 }
 
 void History::forumChanged(Data::Forum *old) {
@@ -3102,7 +3352,8 @@ void History::forumChanged(Data::Forum *old) {
 		forum->topicsList()->unreadStateChanges(
 		) | rpl::filter([=] {
 			return (_flags & Flag::IsForum) && inChatList();
-		}) | rpl::map(AdjustedForumUnreadState
+		}) | rpl::map(
+			AdjustedForumUnreadState
 		) | rpl::start_with_next([=](const Dialogs::UnreadState &old) {
 			notifyUnreadStateChange(old);
 		}, forum->lifetime());
@@ -3114,7 +3365,7 @@ void History::forumChanged(Data::Forum *old) {
 	} else {
 		_flags &= ~Flag::IsForum;
 	}
-	if (cloudDraft(MsgId(0))) {
+	if (cloudDraft(MsgId(), PeerId())) {
 		updateChatListSortPosition();
 	}
 	_flags |= Flag::PendingAllItemsResize;
@@ -3122,6 +3373,47 @@ void History::forumChanged(Data::Forum *old) {
 
 bool History::isForum() const {
 	return (_flags & Flag::IsForum);
+}
+
+void History::monoforumChanged(Data::SavedMessages *old) {
+	if (inChatList()) {
+		notifyUnreadStateChange(old
+			? AdjustedForumUnreadState(
+				withMyMuted(old->chatsList()->unreadState()))
+			: computeUnreadState());
+	}
+
+	if (const auto monoforum = peer->monoforum()) {
+		_flags |= Flag::IsMonoforumAdmin;
+
+		monoforum->chatsList()->unreadStateChanges(
+		) | rpl::filter([=] {
+			return (_flags & Flag::IsMonoforumAdmin) && inChatList();
+		}) | rpl::map([=](const Dialogs::UnreadState &was) {
+			return AdjustedForumUnreadState(withMyMuted(was));
+		}) | rpl::start_with_next([=](const Dialogs::UnreadState &old) {
+			notifyUnreadStateChange(old);
+		}, monoforum->lifetime());
+
+		monoforum->chatsListChanges(
+		) | rpl::start_with_next([=] {
+			updateChatListEntry();
+		}, monoforum->lifetime());
+	} else {
+		_flags &= ~Flag::IsMonoforumAdmin;
+	}
+	if (cloudDraft(MsgId(), PeerId())) {
+		updateChatListSortPosition();
+	}
+	_flags |= Flag::PendingAllItemsResize;
+}
+
+bool History::amMonoforumAdmin() const {
+	return (_flags & Flag::IsMonoforumAdmin);
+}
+
+bool History::suggestDraftAllowed() const {
+	return peer->isMonoforum() && !peer->amMonoforumAdmin();
 }
 
 not_null<History*> History::migrateToOrMe() const {
@@ -3214,9 +3506,10 @@ Data::HistoryMessages *History::maybeMessages() {
 HistoryItem *History::insertJoinedMessage() {
 	const auto channel = peer->asChannel();
 	if (!channel
+		|| channel->isMonoforum()
 		|| _joinedMessage
 		|| !channel->amIn()
-		|| (peer->isMegagroup()
+		|| (channel->isMegagroup()
 			&& channel->mgInfo->joinedMessageFound)) {
 		return _joinedMessage;
 	}
@@ -3243,6 +3536,85 @@ HistoryItem *History::insertJoinedMessage() {
 		channel->inviteViaRequest);
 	insertMessageToBlocks(_joinedMessage);
 	return _joinedMessage;
+}
+
+void History::checkNewPeerMessages() {
+	if (!loadedAtTop()) {
+		return;
+	}
+	const auto user = peer->asUser();
+	if (!user) {
+		return;
+	}
+	const auto photo = user->photoChangeDate();
+	const auto name = user->nameChangeDate();
+	if (!photo && _newPeerPhotoChange) {
+		_newPeerPhotoChange->destroy();
+	}
+	if (!name && _newPeerNameChange) {
+		_newPeerNameChange->destroy();
+	}
+	if ((!photo || _newPeerPhotoChange) && (!name || _newPeerNameChange)) {
+		return;
+	}
+
+	const auto when = [](TimeId date) {
+		const auto now = base::unixtime::now();
+		const auto passed = now - date;
+		if (passed < 3600) {
+			return tr::lng_new_contact_updated_now(tr::now);
+		} else if (passed < 24 * 3600) {
+			return tr::lng_new_contact_updated_hours(
+				tr::now,
+				lt_count,
+				(passed / 3600));
+		} else if (passed < 60 * 24 * 3600) {
+			return tr::lng_new_contact_updated_days(
+				tr::now,
+				lt_count,
+				(passed / (24 * 3600)));
+		}
+		return tr::lng_new_contact_updated_months(
+			tr::now,
+			lt_count,
+			(passed / (30 * 24 * 3600)));
+	};
+
+	auto firstDate = TimeId();
+	for (const auto &block : blocks) {
+		for (const auto &message : block->messages) {
+			const auto item = message->data();
+			if (item != _newPeerPhotoChange && item != _newPeerNameChange) {
+				firstDate = item->date();
+				break;
+			}
+		}
+		if (firstDate) {
+			break;
+		}
+	}
+	if (!firstDate) {
+		firstDate = base::unixtime::serialize(
+			QDateTime(QDate(2013, 8, 1), QTime(0, 0)));
+	}
+	const auto add = [&](tr::phrase<lngtag_when> phrase, TimeId date) {
+		const auto result = makeMessage({
+			.id = owner().nextLocalMessageId(),
+			.flags = MessageFlag::Local | MessageFlag::HideDisplayDate,
+			.date = (--firstDate),
+		}, PreparedServiceText{ TextWithEntities{
+			phrase(tr::now, lt_when, when(date)),
+		} });
+		insertMessageToBlocks(result);
+		return result;
+	};
+
+	if (photo && !_newPeerPhotoChange) {
+		_newPeerPhotoChange = add(tr::lng_new_contact_updated_photo, photo);
+	}
+	if (name && !_newPeerNameChange) {
+		_newPeerNameChange = add(tr::lng_new_contact_updated_name, name);
+	}
 }
 
 void History::insertMessageToBlocks(not_null<HistoryItem*> item) {
@@ -3298,6 +3670,8 @@ void History::checkLocalMessages() {
 		&& peer->asChannel()->inviter
 		&& goodDate(peer->asChannel()->inviteDate)) {
 		insertJoinedMessage();
+	} else {
+		checkNewPeerMessages();
 	}
 }
 
@@ -3308,6 +3682,15 @@ HistoryItem *History::joinedMessageInstance() const {
 void History::removeJoinedMessage() {
 	if (_joinedMessage) {
 		_joinedMessage->destroy();
+	}
+}
+
+void History::removeNewPeerMessages() {
+	if (_newPeerNameChange) {
+		_newPeerNameChange->destroy();
+	}
+	if (_newPeerPhotoChange) {
+		_newPeerPhotoChange->destroy();
 	}
 }
 
@@ -3446,7 +3829,7 @@ std::vector<MsgId> History::collectMessagesFromParticipantToDelete(
 	return result;
 }
 
-void History::clear(ClearType type) {
+void History::clear(ClearType type, bool markEmpty) {
 	_unreadBarView = nullptr;
 	_firstUnreadView = nullptr;
 	removeJoinedMessage();
@@ -3456,7 +3839,7 @@ void History::clear(ClearType type) {
 	owner().notifyHistoryUnloaded(this);
 	lastKeyboardInited = false;
 	if (type == ClearType::Unload) {
-		_loadedAtTop = _loadedAtBottom = false;
+		_loadedAtTop = _loadedAtBottom = markEmpty;
 	} else {
 		// Leave the 'sending' messages in local messages.
 		auto local = base::flat_set<not_null<HistoryItem*>>();
@@ -3589,6 +3972,11 @@ void History::translateOfferFrom(LanguageId id) {
 		}
 	} else if (!_translation) {
 		_translation = std::make_unique<HistoryTranslation>(this, id);
+		using Flag = PeerData::TranslationFlag;
+		if (peer->autoTranslation()
+			&& (peer->translationFlag() == Flag::Enabled)) {
+			translateTo(Core::App().settings().translateTo());
+		}
 	} else {
 		_translation->offerFrom(id);
 	}

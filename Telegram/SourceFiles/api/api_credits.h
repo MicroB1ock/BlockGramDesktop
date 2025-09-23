@@ -12,6 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_credits_earn.h"
 #include "mtproto/sender.h"
 
+namespace Data {
+class SavedStarGiftId;
+} // namespace Data
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -71,14 +75,19 @@ private:
 
 class CreditsHistory final {
 public:
-	CreditsHistory(not_null<PeerData*> peer, bool in, bool out);
+	CreditsHistory(
+		not_null<PeerData*> peer,
+		bool in,
+		bool out,
+		bool currency = false);
 
 	void request(
 		const Data::CreditsStatusSlice::OffsetToken &token,
 		Fn<void(Data::CreditsStatusSlice)> done);
 	void requestSubscriptions(
 		const Data::CreditsStatusSlice::OffsetToken &token,
-		Fn<void(Data::CreditsStatusSlice)> done);
+		Fn<void(Data::CreditsStatusSlice)> done,
+		bool missingBalance = false);
 
 private:
 	using HistoryTL = MTPpayments_GetStarsTransactions;
@@ -115,5 +124,9 @@ void EditCreditsSubscription(
 	bool cancel,
 	Fn<void()> done,
 	Fn<void(QString)> fail);
+
+[[nodiscard]] MTPInputSavedStarGift InputSavedStarGiftId(
+	const Data::SavedStarGiftId &id,
+	const std::shared_ptr<Data::UniqueGift> &unique = nullptr);
 
 } // namespace Api

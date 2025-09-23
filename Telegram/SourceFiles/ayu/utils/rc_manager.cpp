@@ -14,19 +14,21 @@
 
 std::unordered_set<ID> default_developers = {
 	963080346, 1282540315, 1374434073, 168769611,
-	1773117711, 5330087923, 666154369, 139303278,
+	1773117711, 5330087923, 139303278, 1752394339,
 	668557709, 1348136086, 6288255532, 7453676178,
+	880708503, 2135966128, 7818249287,
 	// -------------------------------------------
 	778327202, 238292700, 1795176335, 6247153446,
-	1752394339, 7745305003, 1183312839, 497855299,
-	623054735
+	1183312839, 497855299
 };
 
 std::unordered_set<ID> default_channels = {
 	1233768168, 1524581881, 1571726392, 1632728092,
 	1172503281, 1877362358, 1905581924, 1794457129,
 	1434550607, 1947958814, 1815864846, 2130395384,
-	1976430343, 1754537498, 1725670701,
+	1976430343, 1754537498, 1725670701, 2401498637,
+	2685666919, 2562664432, 2564770112, 2331068091,
+	1559501352, 2641258043
 };
 
 void RCManager::start() {
@@ -49,7 +51,7 @@ void RCManager::makeRequest() {
 
 	clearSentRequest();
 
-	const auto request = QNetworkRequest(QUrl("https://update.ayugram.one/rc/current/desktop"));
+	const auto request = QNetworkRequest(QUrl("https://update.ayugram.one/rc/current/desktop2"));
 	_reply = _manager->get(request);
 	connect(_reply,
 			&QNetworkReply::finished,
@@ -103,12 +105,16 @@ bool RCManager::applyResponse(const QByteArray &response) {
 	const auto root = document.object();
 
 	const auto developers = root.value("developers").toArray();
-	const auto channels = root.value("channels").toArray();
+	const auto officialChannels = root.value("officialChannels").toArray();
 	const auto supporters = root.value("supporters").toArray();
+	const auto supporterChannels = root.value("supporterChannels").toArray();
+	const auto customBadges = root.value("customBadges").toArray();
 
 	_developers.clear();
-	_channels.clear();
+	_officialChannels.clear();
 	_supporters.clear();
+	_supporterChannels.clear();
+	_customBadges.clear();
 
 	for (const auto &developer : developers) {
 		if (const auto id = developer.toVariant().toLongLong()) {
@@ -116,9 +122,9 @@ bool RCManager::applyResponse(const QByteArray &response) {
 		}
 	}
 
-	for (const auto &channel : channels) {
+	for (const auto &channel : officialChannels) {
 		if (const auto id = channel.toVariant().toLongLong()) {
-			_channels.insert(id);
+			_officialChannels.insert(id);
 		}
 	}
 
@@ -128,10 +134,47 @@ bool RCManager::applyResponse(const QByteArray &response) {
 		}
 	}
 
+	for (const auto &channel : supporterChannels) {
+		if (const auto id = channel.toVariant().toLongLong()) {
+			_supporterChannels.insert(id);
+		}
+	}
+
+	for (const auto &badge : customBadges) {
+		if (!badge.isObject()) {
+			continue;
+		}
+		const auto obj = badge.toObject();
+		const auto id = obj.value("id").toVariant().toLongLong();
+		if (!id) {
+			continue;
+		}
+		const auto badgeObj = obj.value("badge");
+		if (!badgeObj.isObject()) {
+			continue;
+		}
+		const auto badgeData = badgeObj.toObject();
+		CustomBadge customBadge;
+		if (const auto emojiStatusId = badgeData.value("documentId").toVariant().toLongLong()) {
+			customBadge.emojiStatusId = EmojiStatusId(emojiStatusId);
+		} else {
+			continue;
+		}
+		if (const auto text = badgeData.value("text").toString(); !text.isEmpty()) {
+			customBadge.text = text;
+		}
+		_customBadges[id] = customBadge;
+	}
+
+	_donateUsername = root.value("donateUsername").toString();
+	_donateAmountUsd = root.value("donateAmountUsd").toString();
+	_donateAmountTon = root.value("donateAmountTon").toString();
+	_donateAmountRub = root.value("donateAmountRub").toString();
+
 	initialized = true;
 
-	LOG(("RCManager: Loaded %1 developers, %2 channels"
-	).arg(_developers.size()).arg(_channels.size()));
+	LOG(("RCManager: Loaded %1 developers, %2 official channels"
+	).arg(_developers.size()).arg(_officialChannels.size()));
 
 	return true;
 }

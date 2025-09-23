@@ -36,6 +36,18 @@
 
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_state.h"
+#include "ayu/data/messages_storage.h"
+#include "data/data_poll.h"
+#include "data/data_saved_sublist.h"
+#include "main/main_domain.h"
+
+namespace {
+
+constexpr auto usernameResolverBotId = 8001593505L;
+const auto usernameResolverBotUsername = QString("TgDBSearchBot");
+const auto usernameResolverEmpty = QString("Error, username or id invalid/not found.");
+
+}
 
 Main::Session *getSession(ID userId) {
 	for (const auto &[index, account] : Core::App().domain().accounts()) {
@@ -49,7 +61,7 @@ Main::Session *getSession(ID userId) {
 	return nullptr;
 }
 
-void dispatchToMainThread(std::function<void()> callback, int delay) {
+void dispatchToMainThread(const std::function<void()> &callback, int delay) {
 	auto timer = new QTimer();
 	timer->moveToThread(qApp->thread());
 	timer->setSingleShot(true);
@@ -82,7 +94,37 @@ bool isExteraPeer(ID peerId) {
 }
 
 bool isSupporterPeer(ID peerId) {
-	return RCManager::getInstance().supporters().contains(peerId);
+	return RCManager::getInstance().supporters().contains(peerId) || RCManager::getInstance().supporterChannels().contains(peerId);
+}
+
+bool isCustomBadgePeer(ID peerId) {
+	return RCManager::getInstance().supporterCustomBadges().contains(peerId);
+}
+
+CustomBadge getCustomBadge(ID peerId) {
+	const auto &badges = RCManager::getInstance().supporterCustomBadges();
+	if (const auto it = badges.find(peerId); it != badges.end()) {
+		return it->second;
+	}
+	return {};
+}
+
+rpl::producer<Info::Profile::Badge::Content> ExteraBadgeTypeFromPeer(not_null<PeerData*> peer) {
+	if (isCustomBadgePeer(getBareID(peer))) {
+		return rpl::single(Info::Profile::Badge::Content{
+			.badge = Info::Profile::BadgeType::ExteraCustom,
+			.emojiStatusId = getCustomBadge(getBareID(peer)).emojiStatusId
+		});
+	} else if (isExteraPeer(getBareID(peer))) {
+		return rpl::single(Info::Profile::Badge::Content{
+			.badge = Info::Profile::BadgeType::Extera
+		});
+	} else if (isSupporterPeer(getBareID(peer))) {
+		return rpl::single(Info::Profile::Badge::Content{
+			.badge = Info::Profile::BadgeType::ExteraSupporter
+		});
+	}
+	return rpl::single(Info::Profile::Badge::Content{Info::Profile::BadgeType::None});
 }
 
 bool isMessageHidden(const not_null<HistoryItem*> item) {
@@ -90,8 +132,8 @@ bool isMessageHidden(const not_null<HistoryItem*> item) {
 		return true;
 	}
 
-	const auto settings = &AyuSettings::getInstance();
-	if (settings->hideFromBlocked) {
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.hideFromBlocked) {
 		if (item->from()->isUser() &&
 			item->from()->asUser()->isBlocked()) {
 			// don't hide messages if it's a dialog with blocked user
@@ -152,13 +194,15 @@ void readReactions(base::weak_ptr<Data::Thread> weakThread) {
 		return;
 	}
 	const auto topic = thread->asTopic();
+	const auto sublist = thread->asSublist();
 	const auto peer = thread->peer();
 	const auto rootId = topic ? topic->rootId() : 0;
 	using Flag = MTPmessages_ReadReactions::Flag;
 	peer->session().api().request(MTPmessages_ReadReactions(
 		MTP_flags(rootId ? Flag::f_top_msg_id : Flag(0)),
 		peer->input,
-		MTP_int(rootId)
+		MTP_int(rootId),
+		sublist ? sublist->sublistPeer()->input : MTPInputPeer()
 	)).done([=](const MTPmessages_AffectedHistory &result)
 	{
 		const auto offset = peer->session().api().applyAffectedHistory(
@@ -167,25 +211,25 @@ void readReactions(base::weak_ptr<Data::Thread> weakThread) {
 		if (offset > 0) {
 			readReactions(weakThread);
 		} else {
-			peer->owner().history(peer)->clearUnreadReactionsFor(rootId);
+			peer->owner().history(peer)->clearUnreadReactionsFor(rootId, sublist);
 		}
 	}).send();
 }
 
 void MarkAsReadThread(not_null<Data::Thread*> thread) {
-	const auto readHistoryNative = [&](not_null<History*> history)
+	const auto readHistoryNative = [&](const not_null<History*> history)
 	{
 		history->owner().histories().readInbox(history);
 	};
 	const auto sendReadMentions = [=](
-		not_null<Data::Thread*> thread)
+		const not_null<Data::Thread*> threadInner)
 	{
-		readMentions(base::make_weak(thread));
+		readMentions(base::make_weak(threadInner));
 	};
 	const auto sendReadReactions = [=](
-		not_null<Data::Thread*> thread)
+		const not_null<Data::Thread*> threadInner)
 	{
-		readReactions(base::make_weak(thread));
+		readReactions(base::make_weak(threadInner));
 	};
 
 	if (thread->chatListBadgesState().unread) {
@@ -262,7 +306,7 @@ QString formatTTL(int time) {
 }
 
 QString getDCName(int dc) {
-	const auto getName = [=](int dc)
+	const auto getName = [=]
 	{
 		switch (dc) {
 			case 1:
@@ -278,7 +322,7 @@ QString getDCName(int dc) {
 		return {"DC_UNKNOWN"};
 	}
 
-	return QString("DC%1, %2").arg(dc).arg(getName(dc));
+	return QString("DC%1, %2").arg(dc).arg(getName());
 }
 
 QString getLocalizedAt() {
@@ -297,6 +341,22 @@ QString formatDateTime(const QDateTime &date) {
 	const auto timePart = locale.toString(date, "HH:mm:ss");
 
 	return datePart + getLocalizedAt() + timePart;
+}
+
+QString formatMessageTime(const QTime &time) {
+	const auto &settings = AyuSettings::getInstance();
+
+	const auto format =
+		settings.showMessageSeconds
+			? (QLocale().timeFormat(QLocale::ShortFormat).contains("AP")
+				   ? "h:mm:ss AP"
+				   : "HH:mm:ss")
+			: QLocale().timeFormat(QLocale::ShortFormat);
+
+	return QLocale().toString(
+		time,
+		format
+	);
 }
 
 int getMediaSizeBytes(not_null<HistoryItem*> message) {
@@ -377,9 +437,7 @@ QString getMediaName(not_null<HistoryItem*> message) {
 
 	const auto media = message->media();
 
-	const auto document = media->document();
-
-	if (document) {
+	if (const auto document = media->document()) {
 		return document->filename();
 	}
 
@@ -494,7 +552,29 @@ int getScheduleTime(int64 sumSize) {
 	return time;
 }
 
-void resolveUser(ID userId, const QString &username, Main::Session *session, const Callback &callback) {
+bool isMessageSavable(const not_null<HistoryItem *> item) {
+	const auto &settings = AyuSettings::getInstance();
+
+	if (!settings.saveDeletedMessages) {
+		return false;
+	}
+
+	if (const auto possiblyBot = item->history()->peer->asUser()) {
+		return !possiblyBot->isBot() || (settings.saveForBots && possiblyBot->isBot());
+	}
+	return true;
+}
+
+void processMessageDelete(not_null<HistoryItem*> item) {
+	if (!isMessageSavable(item)) {
+		item->destroy();
+	} else {
+		item->setDeleted();
+		AyuMessages::addDeletedMessage(item);
+	}
+}
+
+void resolveUser(ID userId, const QString &username, Main::Session *session, const UsernameResolverCallback &callback) {
 	auto normalized = username.trimmed().toLower();
 	if (normalized.isEmpty()) {
 		callback(QString(), nullptr);
@@ -534,19 +614,18 @@ void resolveUser(ID userId, const QString &username, Main::Session *session, con
 	}).send();
 }
 
-void searchUser(long long userId, Main::Session *session, bool searchUserFlag, const Callback &callback) {
+void searchUser(long long userId, Main::Session *session, bool searchUserFlag, const UsernameResolverCallback &callback) {
 	if (!session) {
 		callback(QString(), nullptr);
 		return;
 	}
 
-	constexpr auto botId = 1696868284;
-	const auto bot = session->data().userLoaded(botId);
+	const auto bot = session->data().userLoaded(usernameResolverBotId);
 
 	if (!bot) {
 		if (searchUserFlag) {
-			resolveUser(botId,
-						"tgdb_bot",
+			resolveUser(usernameResolverBotId,
+						usernameResolverBotUsername,
 						session,
 						[=](const QString &title, UserData *data)
 						{
@@ -617,7 +696,7 @@ void searchUser(long long userId, Main::Session *session, bool searchUserFlag, c
 					return QString();
 				});
 
-			if (text.isEmpty()) {
+			if (text.isEmpty() || text.contains(usernameResolverEmpty)) {
 				continue;
 			}
 
@@ -625,21 +704,17 @@ void searchUser(long long userId, Main::Session *session, bool searchUserFlag, c
 			QString title; // 🏷
 			QString username; // 📧
 
-			for (const auto &line : text.split('\n')) {
+			for (auto &line : text.split('\n')) {
 				if (line.startsWith("🆔")) {
-					id = line.mid(line.indexOf(':') + 1).toLongLong();
+					id = line.mid(line.indexOf(": ") + 2).toLongLong();
 				} else if (line.startsWith("🏷")) {
-					title = line.mid(line.indexOf(':') + 1);
+					title = line.mid(line.indexOf(": ") + 2);
 				} else if (line.startsWith("📧")) {
-					username = line.mid(line.indexOf(':') + 1);
+					username = line.mid(line.indexOf(": ") + 2);
 				}
 			}
 
-			if (id == 0) {
-				continue;
-			}
-
-			if (id != userId) {
+			if (id == 0 || id != userId) {
 				continue;
 			}
 
@@ -670,7 +745,7 @@ void searchUser(long long userId, Main::Session *session, bool searchUserFlag, c
 	}).handleAllErrors().send();
 }
 
-void searchById(ID userId, Main::Session *session, const Callback &callback) {
+void searchById(ID userId, Main::Session *session, const UsernameResolverCallback &callback) {
 	if (userId == 0 || !session) {
 		callback(QString(), nullptr);
 		return;
@@ -705,4 +780,35 @@ ID getUserIdFromPackId(uint64 id) {
 	}
 
 	return ownerId;
+}
+
+TextWithTags extractText(not_null<HistoryItem*> item) {
+	TextWithTags result;
+
+	QString text;
+	if (const auto media = item->media()) {
+		if (const auto poll = media->poll()) {
+			text.append("\xF0\x9F\x93\x8A ") // 📊
+				.append(poll->question.text).append("\n");
+			for (const auto answer : poll->answers) {
+				text.append("• ").append(answer.text.text).append("\n");
+			}
+		}
+	}
+
+	result.tags = TextUtilities::ConvertEntitiesToTextTags(item->originalText().entities);
+	result.text = text.isEmpty() ? item->originalText().text : text;
+	return result;
+}
+
+bool mediaDownloadable(const Data::Media *media) {
+	if (!media
+		|| media->webpage() || media->poll() || media->game()
+		|| media->invoice() || media->location() || media->paper()
+		|| media->giveawayStart() || media->giveawayResults()
+		|| media->sharedContact() || media->call()
+	) {
+		return false;
+	}
+	return true;
 }

@@ -11,6 +11,7 @@
 - Кастомизация шрифта
 - Режим Стримера
 - Локальный телеграм премиум
+- Переводчик
 - Превью медиа и быстрая реакция при сильном нажатии на тачпад (macOS)
 - Улучшенный вид
 
@@ -30,10 +31,10 @@
 
 ### Windows
 
-#### Официальный вариант
+#### Официальная версия
 
 Вы можете скачать готовый бинарный файл со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases) или из
-[Телеграм чата](https://t.me/ayugramchat/12788).
+[Телеграм канала](https://t.me/AyuGramReleases).
 
 #### Winget
 
@@ -55,19 +56,45 @@ scoop install ayugram
 
 ### macOS
 
+#### Официальная версия
+
 Вы можете скачать подписанный пакет со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases).
+
+#### Homebrew
+
+```bash
+brew install --cask ayugram
+```
 
 ### Arch Linux
 
-Вы можете установить `ayugram-desktop` из [AUR](https://aur.archlinux.org/packages?O=0&K=ayugram).
+#### Из исходников (рекомендованный способ)
+
+Установите `ayugram-desktop` из [AUR](https://aur.archlinux.org/packages/ayugram-desktop).
+
+#### Готовые бинарники
+
+Установите `ayugram-desktop-bin` из [AUR](https://aur.archlinux.org/packages/ayugram-desktop-bin).
+
+Примечание: данный пакет собирается не нами.
 
 ### NixOS
 
 Попробуйте [этот репозиторий](https://github.com/ayugram-port/ayugram-desktop).
 
+### ALT Linux
+
+[Sisyphus](https://packages.altlinux.org/en/sisyphus/srpms/ayugram-desktop/)
+
+### EPM
+
+`epm play ayugram`
+
 ### Любой другой Линукс дистрибутив
 
-Следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
+Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
+
+Или следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
 ### Примечания для Windows
 
@@ -101,3 +128,7 @@ scoop install ayugram
 ### Иконки
 
 - [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736)
+
+### Боты
+
+- [TelegramDB](https://t.me/tgdatabase) для получения юзернейма по ID

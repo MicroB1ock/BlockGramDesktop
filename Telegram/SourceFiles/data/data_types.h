@@ -37,6 +37,7 @@ using Options = base::flags<Option>;
 namespace Data {
 
 struct FileOrigin;
+struct EmojiStatusCollectible;
 
 struct UploadState {
 	explicit UploadState(int64 size) : size(size) {
@@ -127,6 +128,7 @@ struct WebPageData;
 struct GameData;
 struct BotAppData;
 struct PollData;
+struct TodoListData;
 
 using PhotoId = uint64;
 using VideoId = uint64;
@@ -135,10 +137,28 @@ using DocumentId = uint64;
 using WebPageId = uint64;
 using GameId = uint64;
 using PollId = uint64;
+using TodoListId = FullMsgId;
 using WallPaperId = uint64;
 using CallId = uint64;
 using BotAppId = uint64;
 using EffectId = uint64;
+using CollectibleId = uint64;
+
+struct EmojiStatusId {
+	DocumentId documentId = 0;
+	std::shared_ptr<Data::EmojiStatusCollectible> collectible;
+
+	explicit operator bool() const {
+		return documentId || collectible;
+	}
+
+	friend inline auto operator<=>(
+		const EmojiStatusId &,
+		const EmojiStatusId &) = default;
+	friend inline bool operator==(
+		const EmojiStatusId &,
+		const EmojiStatusId &) = default;
+};
 
 constexpr auto CancelledWebPageId = WebPageId(0xFFFFFFFFFFFFFFFFULL);
 
@@ -331,6 +351,13 @@ enum class MessageFlag : uint64 {
 	EstimatedDate         = (1ULL << 49),
 
 	ReactionsAllowed      = (1ULL << 50),
+
+	HideDisplayDate       = (1ULL << 51),
+
+	StarsPaidSuggested    = (1ULL << 52),
+	TonPaidSuggested      = (1ULL << 53),
+
+	AyuNoForwards         = (1ULL << 63),
 };
 inline constexpr bool is_flag_type(MessageFlag) { return true; }
 using MessageFlags = base::flags<MessageFlag>;
@@ -361,8 +388,6 @@ struct ForwardDraft {
 		const ForwardDraft&,
 		const ForwardDraft&) = default;
 };
-
-using ForwardDrafts = base::flat_map<MsgId, ForwardDraft>;
 
 struct ResolvedForwardDraft {
 	HistoryItemsList items;

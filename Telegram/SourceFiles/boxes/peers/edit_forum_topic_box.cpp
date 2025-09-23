@@ -27,7 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/premium_preview_box.h"
 #include "main/main_session.h"
 #include "history/history.h"
-#include "history/view/history_view_replies_section.h"
+#include "history/view/history_view_chat_section.h"
 #include "history/view/history_view_sticker_toast.h"
 #include "lang/lang_keys.h"
 #include "info/profile/info_profile_emoji_status_panel.h"
@@ -93,11 +93,12 @@ void DefaultIconEmoji::paint(QPainter &p, const Context &context) {
 	const auto &st = (_tag == Data::CustomEmojiSizeTag::Normal)
 		? st::normalForumTopicIcon
 		: st::defaultForumTopicIcon;
+	const auto general = Data::IsForumGeneralIconTitle(_icon.title);
 	if (_image.isNull()) {
-		_image = Data::IsForumGeneralIconTitle(_icon.title)
+		_image = general
 			? Data::ForumTopicGeneralIconFrame(
 				st.size,
-				Data::ParseForumGeneralIconColor(_icon.colorId))
+				QColor(255, 255, 255))
 			: Data::ForumTopicIconFrame(_icon.colorId, _icon.title, st);
 	}
 	const auto full = (_tag == Data::CustomEmojiSizeTag::Normal)
@@ -106,7 +107,9 @@ void DefaultIconEmoji::paint(QPainter &p, const Context &context) {
 	const auto esize = full / style::DevicePixelRatio();
 	const auto customSize = Ui::Text::AdjustCustomEmojiSize(esize);
 	const auto skip = (customSize - st.size) / 2;
-	p.drawImage(context.position + QPoint(skip, skip), _image);
+	p.drawImage(context.position + QPoint(skip, skip), general
+		? style::colorizeImage(_image, context.textColor)
+		: _image);
 }
 
 void DefaultIconEmoji::unload() {
@@ -265,7 +268,7 @@ struct IconSelector {
 	const auto manager = &controller->session().data().customEmojiManager();
 
 	auto factory = [=](DocumentId id, Fn<void()> repaint)
-		-> std::unique_ptr<Ui::Text::CustomEmoji> {
+	-> std::unique_ptr<Ui::Text::CustomEmoji> {
 		const auto tag = Data::CustomEmojiManager::SizeTag::Large;
 		if (id == kDefaultIconId) {
 			return std::make_unique<DefaultIconEmoji>(
@@ -288,7 +291,7 @@ struct IconSelector {
 			.show = controller->uiShow(),
 			.mode = EmojiListWidget::Mode::TopicIcon,
 			.paused = Window::PausedIn(controller, PauseReason::Layer),
-			.customRecentList = recent(),
+			.customRecentList = DocumentListToRecent(recent()),
 			.customRecentFactory = std::move(factory),
 			.st = &st::reactPanelEmojiPan,
 		}),
@@ -297,7 +300,7 @@ struct IconSelector {
 	icons->requestDefaultIfUnknown();
 	icons->defaultUpdates(
 	) | rpl::start_with_next([=] {
-		selector->provideRecent(recent());
+		selector->provideRecent(DocumentListToRecent(recent()));
 	}, selector->lifetime());
 
 	placeFooter(selector->createFooter());
@@ -518,13 +521,15 @@ void EditForumTopicBox(
 			title->showError();
 			return;
 		}
+		using namespace HistoryView;
 		controller->showSection(
-			std::make_shared<HistoryView::RepliesMemento>(
-				forum,
-				channel->forum()->reserveCreatingId(
+			std::make_shared<ChatMemento>(ChatViewId{
+				.history = forum,
+				.repliesRootId = channel->forum()->reserveCreatingId(
 					title->getLastText().trimmed(),
 					state->defaultIcon.current().colorId,
-					state->iconId.current())),
+					state->iconId.current()),
+			}),
 			Window::SectionShow::Way::ClearStack);
 	};
 

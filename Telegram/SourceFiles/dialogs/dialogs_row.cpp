@@ -324,7 +324,9 @@ Row::~Row() {
 void Row::recountHeight(float64 narrowRatio, FilterId filterId) {
 	if (const auto history = _id.history()) {
 		const auto hasTags = _id.entry()->hasChatsFilterTags(filterId);
-		_height = history->isForum()
+		const auto wideRow = history->isForum()
+			|| history->amMonoforumAdmin();
+		_height = wideRow
 			? anim::interpolate(
 				hasTags
 					? st::taggedForumDialogRow.height
@@ -470,7 +472,13 @@ void Row::PaintCornerBadgeFrame(
 		for (auto i = 0; i != storiesUnreadCount; ++i) {
 			segments.push_back({ storiesUnreadBrush, storiesUnread });
 		}
-		Ui::PaintOutlineSegments(q, outline, segments);
+		if (peer && (peer->forum() || peer->monoforum())) {
+			const auto radius = context.st->photoSize
+				* Ui::ForumUserpicRadiusMultiplier();
+			Ui::PaintOutlineSegments(q, outline, radius, segments);
+		} else {
+			Ui::PaintOutlineSegments(q, outline, segments);
+		}
 	}
 
 	if (subscribed) {
@@ -547,12 +555,12 @@ void Row::paintUserpic(
 		updateCornerBadgeShown(peer, nullptr, hasUnreadBadgesAbove);
 	}
 
-	const auto settings = &AyuSettings::getInstance();
+	const auto &settings = AyuSettings::getInstance();
 
 	const auto cornerBadgeShown = !_cornerBadgeUserpic
 		? _cornerBadgeShown
 		: !_cornerBadgeUserpic->layersManager.isDisplayedNone();
-	const auto storiesPeer = settings->disableStories ? nullptr : peer
+	const auto storiesPeer = settings.disableStories ? nullptr : peer
 		? ((peer->isUser() || peer->isChannel()) ? peer : nullptr)
 		: nullptr;
 	const auto storiesFolder = peer ? nullptr : _id.folder();

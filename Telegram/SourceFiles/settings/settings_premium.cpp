@@ -13,9 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/click_handler_types.h"
 #include "core/local_url_handlers.h" // Core::TryConvertUrlToLocal.
-#include "core/ui_integration.h" // MarkedTextContext.
+#include "core/ui_integration.h" // TextContext.
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_emoji_statuses.h"
 #include "data/data_peer_values.h"
 #include "data/data_session.h"
 #include "data/stickers/data_custom_emoji.h" // SerializeCustomEmojiId.
@@ -88,6 +89,7 @@ using SectionCustomTopBarData = Info::Settings::SectionCustomTopBarData;
 
 		if (option.duration == tr::lng_months(tr::now, lt_count, 1)) {
 			option.costPerMonth = QString();
+			option.costNoDiscount = QString();
 			option.duration = tr::lng_premium_subscribe_months_1(tr::now);
 		} else if (option.duration == tr::lng_months(tr::now, lt_count, 6)) {
 			option.duration = tr::lng_premium_subscribe_months_6(tr::now);
@@ -214,7 +216,6 @@ using Order = std::vector<QString>;
 				tr::lng_premium_summary_subtitle_tags_for_messages(),
 				tr::lng_premium_summary_about_tags_for_messages(),
 				PremiumFeature::TagsForMessages,
-				true,
 			},
 		},
 		{
@@ -224,7 +225,6 @@ using Order = std::vector<QString>;
 				tr::lng_premium_summary_subtitle_last_seen(),
 				tr::lng_premium_summary_about_last_seen(),
 				PremiumFeature::LastSeen,
-				true,
 			},
 		},
 		{
@@ -234,7 +234,6 @@ using Order = std::vector<QString>;
 				tr::lng_premium_summary_subtitle_message_privacy(),
 				tr::lng_premium_summary_about_message_privacy(),
 				PremiumFeature::MessagePrivacy,
-				true,
 			},
 		},
 		{
@@ -389,7 +388,15 @@ using Order = std::vector<QString>;
 				tr::lng_premium_summary_subtitle_effects(),
 				tr::lng_premium_summary_about_effects(),
 				PremiumFeature::Effects,
-				true,
+			},
+		},
+		{
+			u"todo"_q,
+			Entry{
+				&st::settingsPremiumIconChecklist,
+				tr::lng_premium_summary_subtitle_todo_lists(),
+				tr::lng_premium_summary_about_todo_lists(),
+				PremiumFeature::TodoLists,
 			},
 		},
 	};
@@ -610,9 +617,12 @@ TopBarUser::TopBarUser(
 
 	auto documentValue = Info::Profile::EmojiStatusIdValue(
 		peer
-	) | rpl::map([=](DocumentId id) -> DocumentData* {
-		const auto document = id
-			? controller->session().data().document(id).get()
+	) | rpl::map([=](EmojiStatusId id) -> DocumentData* {
+		const auto documentId = id.collectible
+			? id.collectible->documentId
+			: id.documentId;
+		const auto document = documentId
+			? controller->session().data().document(documentId).get()
 			: nullptr;
 		return (document && document->sticker()) ? document : nullptr;
 	});
@@ -791,11 +801,9 @@ void TopBarUser::updateTitle(
 			lt_link,
 			{ .text = text, .entities = entities, },
 			Ui::Text::WithEntities);
-	const auto context = Core::MarkedTextContext{
-		.session = &controller->session(),
-		.customEmojiRepaint = [=] { _title->update(); },
-	};
-	_title->setMarkedText(std::move(title), context);
+	_title->setMarkedText(
+		std::move(title),
+		Core::TextContext({ .session = &controller->session() }));
 	auto link = std::make_shared<LambdaClickHandler>([=,
 			stickerSetIdentifier = stickerInfo->set] {
 		setPaused(true);
@@ -1043,8 +1051,8 @@ QPointer<Ui::RpWidget> Premium::createPinnedToTop(
 			}
 		}
 
-		auto settings = &AyuSettings::getInstance();
-		if (settings->localPremium) {
+		const auto &settings = AyuSettings::getInstance();
+		if (settings.localPremium) {
 			return tr::ayu_LocalPremiumNotice(Ui::Text::RichLangValue);
 		}
 
@@ -1194,7 +1202,7 @@ QPointer<Ui::RpWidget> Premium::createPinnedToBottom(
 			if (const auto peer = data.peer(emojiStatusData.peerId)) {
 				return Info::Profile::EmojiStatusIdValue(
 					peer
-				) | rpl::map([=](DocumentId id) {
+				) | rpl::map([=](EmojiStatusId id) {
 					return id
 						? tr::lng_premium_emoji_status_button()
 						: _buttonText.value();
@@ -1347,7 +1355,11 @@ void ShowGiftPremium(
 void ShowEmojiStatusPremium(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
-	ShowPremium(controller, Ref::EmojiStatus::Serialize({ peer->id }));
+	if (const auto unique = peer->emojiStatusId().collectible.get()) {
+		Core::ResolveAndShowUniqueGift(controller->uiShow(), unique->slug);
+	} else {
+		ShowPremium(controller, Ref::EmojiStatus::Serialize({ peer->id }));
+	}
 }
 
 void StartPremiumPayment(
@@ -1386,19 +1398,17 @@ void ShowPremiumPromoToast(
 		TextWithEntities textWithLink,
 		const QString &ref) {
 	ShowPremiumPromoToast(show, [=](
-			not_null<Main::Session*> session,
-			ChatHelpers::WindowUsage usage) {
+			not_null<Main::Session*> session) {
 		Expects(&show->session() == session);
 
-		return show->resolveWindow(usage);
+		return show->resolveWindow();
 	}, std::move(textWithLink), ref);
 }
 
 void ShowPremiumPromoToast(
 		std::shared_ptr<Main::SessionShow> show,
 		Fn<Window::SessionController*(
-			not_null<Main::Session*>,
-			ChatHelpers::WindowUsage)> resolveWindow,
+			not_null<Main::Session*>)> resolveWindow,
 		TextWithEntities textWithLink,
 		const QString &ref) {
 	using WeakToast = base::weak_ptr<Ui::Toast::Instance>;
@@ -1413,8 +1423,7 @@ void ShowPremiumPromoToast(
 					strong->hideAnimated();
 					(*toast) = nullptr;
 					if (const auto controller = resolveWindow(
-							&show->session(),
-							ChatHelpers::WindowUsage::PremiumPromo)) {
+							&show->session())) {
 						Settings::ShowPremium(controller, ref);
 					}
 					return true;
@@ -1486,12 +1495,10 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 	Expects(args.show || args.controller);
 
 	auto show = args.show ? std::move(args.show) : args.controller->uiShow();
-	auto resolve = [show](
-			not_null<Main::Session*> session,
-			ChatHelpers::WindowUsage usage) {
+	auto resolve = [show](not_null<Main::Session*> session) {
 		Expects(session == &show->session());
 
-		return show->resolveWindow(usage);
+		return show->resolveWindow();
 	};
 	return CreateSubscribeButton(
 		std::move(show),
@@ -1502,8 +1509,7 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 not_null<Ui::GradientButton*> CreateSubscribeButton(
 		std::shared_ptr<::Main::SessionShow> show,
 		Fn<Window::SessionController*(
-			not_null<::Main::Session*>,
-			ChatHelpers::WindowUsage)> resolveWindow,
+			not_null<::Main::Session*>)> resolveWindow,
 		SubscribeButtonArgs &&args) {
 	const auto result = Ui::CreateChild<Ui::GradientButton>(
 		args.parent.get(),
@@ -1518,8 +1524,7 @@ not_null<Ui::GradientButton*> CreateSubscribeButton(
 			computeRef = args.computeRef,
 			computeBotUrl = args.computeBotUrl] {
 		const auto window = resolveWindow(
-			&show->session(),
-			ChatHelpers::WindowUsage::PremiumPromo);
+			&show->session());
 		if (!window) {
 			return;
 		} else if (promo) {
@@ -1622,6 +1627,8 @@ std::vector<PremiumFeature> PremiumFeaturesOrder(
 			return PremiumFeature::Wallpapers;
 		} else if (s == u"effects"_q) {
 			return PremiumFeature::Effects;
+		} else if (s == u"todo"_q) {
+			return PremiumFeature::TodoLists;
 		}
 		return PremiumFeature::kCount;
 	}) | ranges::views::filter([](PremiumFeature type) {

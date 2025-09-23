@@ -59,27 +59,41 @@ struct CreditsHistoryEntry final {
 	QDateTime lastSaleDate;
 	PhotoId photoId = 0;
 	std::vector<CreditsHistoryMedia> extended;
-	StarsAmount credits;
+	CreditsAmount credits;
 	uint64 bareMsgId = 0;
 	uint64 barePeerId = 0;
 	uint64 bareGiveawayMsgId = 0;
 	uint64 bareGiftStickerId = 0;
 	uint64 bareGiftOwnerId = 0;
+	uint64 bareGiftReleasedById = 0;
+	uint64 bareGiftResaleRecipientId = 0;
 	uint64 bareActorId = 0;
+	uint64 bareEntryOwnerId = 0;
+	uint64 giftChannelSavedId = 0;
 	uint64 stargiftId = 0;
 	std::shared_ptr<UniqueGift> uniqueGift;
-	StarsAmount starrefAmount;
+	Fn<std::vector<CreditsHistoryEntry>()> pinnedSavedGifts;
+	CreditsAmount starrefAmount;
 	int starrefCommission = 0;
 	uint64 starrefRecipientId = 0;
 	PeerType peerType;
 	QDateTime subscriptionUntil;
+
+	// Currency properties.
+	QDateTime adsProceedsToDate;
+	QString provider; // Unused.
+
 	QDateTime successDate;
 	QString successLink;
+	int paidMessagesCount = 0;
+	CreditsAmount paidMessagesAmount;
+	int paidMessagesCommission = 0;
 	int limitedCount = 0;
 	int limitedLeft = 0;
 	int starsConverted = 0;
 	int starsToUpgrade = 0;
 	int starsUpgradedBySender = 0;
+	int premiumMonthsForStars = 0;
 	int floodSkip = 0;
 	bool converted : 1 = false;
 	bool anonymous : 1 = false;
@@ -87,8 +101,11 @@ struct CreditsHistoryEntry final {
 	bool giftTransferred : 1 = false;
 	bool giftRefunded : 1 = false;
 	bool giftUpgraded : 1 = false;
+	bool giftResale : 1 = false;
+	bool giftPinned : 1 = false;
 	bool savedToProfile : 1 = false;
 	bool fromGiftsList : 1 = false;
+	bool fromGiftSlug : 1 = false;
 	bool soldOutInfo : 1 = false;
 	bool canUpgradeGift : 1 = false;
 	bool hasGiftComment : 1 = false;
@@ -104,7 +121,7 @@ struct CreditsStatusSlice final {
 	using OffsetToken = QString;
 	std::vector<CreditsHistoryEntry> list;
 	std::vector<SubscriptionEntry> subscriptions;
-	StarsAmount balance;
+	CreditsAmount balance;
 	uint64 subscriptionsMissingBalance = 0;
 	bool allLoaded = false;
 	OffsetToken token;

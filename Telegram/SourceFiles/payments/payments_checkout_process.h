@@ -54,6 +54,7 @@ enum class CheckoutResult {
 	Pending,
 	Cancelled,
 	Failed,
+	Free, // Gift transfer attempt that doesn't need any payment.
 };
 
 struct RealFormPresentedNotification {
@@ -88,7 +89,8 @@ public:
 		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess);
 	static void Start(
 		InvoicePremiumGiftCode giftCodeInvoice,
-		Fn<void(CheckoutResult)> reactivate);
+		Fn<void(CheckoutResult)> reactivate,
+		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess = nullptr);
 	static void Start(
 		InvoiceCredits creditsInvoice,
 		Fn<void(CheckoutResult)> reactivate);

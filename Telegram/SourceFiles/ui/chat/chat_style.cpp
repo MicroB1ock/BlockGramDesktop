@@ -48,8 +48,8 @@ void EnsureBlockquoteCache(
 	cache->outlines = colors.outlines;
 	cache->icon = colors.name;
 
-	const auto settings = &AyuSettings::getInstance();
-	if (settings->simpleQuotesAndReplies) {
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.simpleQuotesAndReplies) {
 		cache->bg = QColor(0, 0, 0, 0);
 	}
 }
@@ -406,6 +406,12 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 		st::historyCallCameraInIconSelected,
 		st::historyCallCameraOutIcon,
 		st::historyCallCameraOutIconSelected);
+	make(
+		&MessageStyle::historyCallGroupIcon,
+		st::historyCallGroupInIcon,
+		st::historyCallGroupInIconSelected,
+		st::historyCallGroupOutIcon,
+		st::historyCallGroupOutIconSelected);
 	make(
 		&MessageStyle::historyFilePlay,
 		st::historyFileInPlay,

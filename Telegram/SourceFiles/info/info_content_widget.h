@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "info/info_wrap_widget.h"
 #include "info/statistics/info_statistics_tag.h"
+#include "ui/controls/swipe_handler_data.h"
 
 namespace Api {
 struct WhoReadList;
@@ -23,6 +24,9 @@ enum class SharedMediaType : signed char;
 } // namespace Storage
 
 namespace Ui {
+namespace Controls {
+struct SwipeHandlerArgs;
+} // namespace Controls
 class RoundRect;
 class ScrollArea;
 class InputField;
@@ -131,7 +135,10 @@ public:
 
 	[[nodiscard]] int scrollBottomSkip() const;
 	[[nodiscard]] rpl::producer<int> scrollBottomSkipValue() const;
-	[[nodiscard]] rpl::producer<bool> desiredBottomShadowVisibility() const;
+	[[nodiscard]] virtual auto desiredBottomShadowVisibility()
+		-> rpl::producer<bool>;
+
+	void replaceSwipeHandler(Ui::Controls::SwipeHandlerArgs *incompleteArgs);
 
 protected:
 	template <typename Widget>
@@ -166,6 +173,8 @@ private:
 	RpWidget *doSetInnerWidget(object_ptr<RpWidget> inner);
 	void updateControlsGeometry();
 	void refreshSearchField(bool shown);
+	void setupSwipeHandler(not_null<Ui::RpWidget*> widget);
+	void updateInnerPadding();
 
 	virtual std::shared_ptr<ContentMemento> doCreateMemento() = 0;
 
@@ -180,6 +189,8 @@ private:
 	base::unique_qptr<Ui::RpWidget> _searchWrap = nullptr;
 	QPointer<Ui::InputField> _searchField;
 	int _innerDesiredHeight = 0;
+	int _additionalScroll = 0;
+	int _addedHeight = 0;
 	int _maxVisibleHeight = 0;
 	bool _isStackBottom = false;
 
@@ -189,6 +200,9 @@ private:
 	// To paint round edges from content.
 	style::margins _paintPadding;
 
+	Ui::Controls::SwipeBackResult _swipeBackData;
+	rpl::lifetime _swipeHandlerLifetime;
+
 };
 
 class ContentMemento {
@@ -196,6 +210,7 @@ public:
 	ContentMemento(
 		not_null<PeerData*> peer,
 		Data::ForumTopic *topic,
+		Data::SavedSublist *sublist,
 		PeerId migratedPeerId);
 	explicit ContentMemento(Settings::Tag settings);
 	explicit ContentMemento(Downloads::Tag downloads);
@@ -225,6 +240,9 @@ public:
 	}
 	Data::ForumTopic *topic() const {
 		return _topic;
+	}
+	Data::SavedSublist *sublist() const {
+		return _sublist;
 	}
 	UserData *settingsSelf() const {
 		return _settingsSelf;
@@ -297,6 +315,7 @@ private:
 	PeerData * const _peer = nullptr;
 	const PeerId _migratedPeerId = 0;
 	Data::ForumTopic *_topic = nullptr;
+	Data::SavedSublist *_sublist = nullptr;
 	UserData * const _settingsSelf = nullptr;
 	PeerData * const _storiesPeer = nullptr;
 	Stories::Tab _storiesTab = {};

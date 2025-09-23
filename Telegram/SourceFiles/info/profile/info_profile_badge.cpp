@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/profile/info_profile_badge.h"
 
+#include "data/data_emoji_statuses.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -27,49 +28,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Info::Profile {
 namespace {
 
-[[nodiscard]] rpl::producer<Badge::Content> ContentForPeer(
-		not_null<PeerData*> peer) {
-	const auto statusOnlyForPremium = peer->isUser();
-	return rpl::combine(
-		BadgeValue(peer),
-		EmojiStatusIdValue(peer)
-	) | rpl::map([=](BadgeType badge, DocumentId emojiStatusId) {
-		if (statusOnlyForPremium && badge != BadgeType::Premium) {
-			emojiStatusId = 0;
-		} else if (emojiStatusId && badge == BadgeType::None) {
-			badge = BadgeType::Premium;
-		}
-		return Badge::Content{ badge, emojiStatusId };
-	});
-}
-
 [[nodiscard]] bool HasPremiumClick(const Badge::Content &content) {
 	return content.badge == BadgeType::Premium
 		|| (content.badge == BadgeType::Verified && content.emojiStatusId)
 		|| (content.badge == BadgeType::Extera)
-		|| (content.badge == BadgeType::ExteraSupporter);
+		|| (content.badge == BadgeType::ExteraSupporter)
+		|| (content.badge == BadgeType::ExteraCustom);
 }
 
 } // namespace
-
-Badge::Badge(
-	not_null<QWidget*> parent,
-	const style::InfoPeerBadge &st,
-	not_null<PeerData*> peer,
-	EmojiStatusPanel *emojiStatusPanel,
-	Fn<bool()> animationPaused,
-	int customStatusLoopsLimit,
-	base::flags<BadgeType> allowed)
-: Badge(
-	parent,
-	st,
-	&peer->session(),
-	ContentForPeer(peer),
-	emojiStatusPanel,
-	std::move(animationPaused),
-	customStatusLoopsLimit,
-	allowed) {
-}
 
 Badge::Badge(
 	not_null<QWidget*> parent,
@@ -122,6 +89,7 @@ void Badge::setContent(Content content) {
 	_view.create(_parent);
 	_view->show();
 	switch (_content.badge) {
+	case BadgeType::ExteraCustom:
 	case BadgeType::Verified:
 	case BadgeType::BotVerified:
 	case BadgeType::Premium: {
@@ -137,7 +105,7 @@ void Badge::setContent(Content content) {
 			: &_st.premium;
 		if (id) {
 			_emojiStatus = _session->data().customEmojiManager().create(
-				id,
+				Data::EmojiStatusCustomId(id),
 				[raw = _view.data()] { raw->update(); },
 				sizeTag());
 			if (_customStatusLoopsLimit > 0) {
@@ -171,9 +139,14 @@ void Badge::setContent(Content content) {
 		}, _view->lifetime());
 	} break;
 	case BadgeType::Scam:
-	case BadgeType::Fake: {
-		const auto fake = (_content.badge == BadgeType::Fake);
-		const auto size = Ui::ScamBadgeSize(fake);
+	case BadgeType::Fake:
+	case BadgeType::Direct: {
+		const auto type = (_content.badge == BadgeType::Direct)
+			? Ui::TextBadgeType::Direct
+			: (_content.badge == BadgeType::Fake)
+			? Ui::TextBadgeType::Fake
+			: Ui::TextBadgeType::Scam;
+		const auto size = Ui::TextBadgeSize(type);
 		const auto skip = st::infoVerifiedCheckPosition.x();
 		_view->resize(
 			size.width() + 2 * skip,
@@ -181,12 +154,14 @@ void Badge::setContent(Content content) {
 		_view->paintRequest(
 		) | rpl::start_with_next([=, badge = _view.data()]{
 			Painter p(badge);
-			Ui::DrawScamBadge(
-				fake,
+			Ui::DrawTextBadge(
+				type,
 				p,
 				badge->rect().marginsRemoved({ skip, skip, skip, skip }),
 				badge->width(),
-				st::attentionButtonFg);
+				(type == Ui::TextBadgeType::Direct
+					? st::windowSubTextFg
+					: st::attentionButtonFg));
 			}, _view->lifetime());
 	} break;
 	case BadgeType::Extera:
@@ -255,6 +230,34 @@ Data::CustomEmojiSizeTag Badge::sizeTag() const {
 		: (_st.sizeTag == 1)
 		? SizeTag::Large
 		: SizeTag::Normal;
+}
+
+rpl::producer<Badge::Content> BadgeContentForPeer(not_null<PeerData*> peer) {
+	const auto statusOnlyForPremium = peer->isUser();
+	return rpl::combine(
+		BadgeValue(peer),
+		EmojiStatusIdValue(peer)
+	) | rpl::map([=](BadgeType badge, EmojiStatusId emojiStatusId) {
+		if (badge == BadgeType::Verified) {
+			badge = BadgeType::None;
+		}
+		if (statusOnlyForPremium && badge != BadgeType::Premium) {
+			emojiStatusId = EmojiStatusId();
+		} else if (emojiStatusId && badge == BadgeType::None) {
+			badge = BadgeType::Premium;
+		}
+		return Badge::Content{ badge, emojiStatusId };
+	});
+}
+
+rpl::producer<Badge::Content> VerifiedContentForPeer(
+		not_null<PeerData*> peer) {
+	return BadgeValue(peer) | rpl::map([=](BadgeType badge) {
+		if (badge != BadgeType::Verified) {
+			badge = BadgeType::None;
+		}
+		return Badge::Content{ badge };
+	});
 }
 
 } // namespace Info::Profile

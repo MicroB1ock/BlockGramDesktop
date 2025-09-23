@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 
 #include "data/data_abstract_structure.h"
+#include "data/data_channel.h"
 #include "data/data_forum.h"
 #include "data/data_message_reactions.h"
 #include "data/data_session.h"
@@ -85,6 +86,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/qthelp_url.h"
 #include "boxes/premium_limits_box.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/controls/location_picker.h"
 #include "styles/style_window.h"
 
 #include <QtCore/QStandardPaths>
@@ -92,6 +94,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
 #include <QtGui/QWindow>
+
+#include <ksandbox.h>
 
 // AyuGram includes
 #include "ayu/ayu_infra.h"
@@ -327,6 +331,8 @@ void Application::run() {
 
 	// Check now to avoid re-entrance later.
 	[[maybe_unused]] const auto ivSupported = Iv::ShowButton();
+	[[maybe_unused]] const auto lpAvailable = Ui::LocationPicker::Available(
+		{});
 
 	_windows.emplace(nullptr, std::make_unique<Window::Controller>());
 	setLastActiveWindow(_windows.front().second.get());
@@ -1111,36 +1117,7 @@ bool Application::openInternalUrl(const QString &url, QVariant context) {
 }
 
 QString Application::changelogLink() const {
-	const auto base = u"https://desktop.telegram.org/changelog"_q;
-	const auto languages = {
-		"id",
-		"de",
-		"fr",
-		"nl",
-		"pl",
-		"tr",
-		"uk",
-		"fa",
-		"ru",
-		"ms",
-		"es",
-		"it",
-		"uz",
-		"pt-br",
-		"be",
-		"ar",
-		"ko",
-	};
-	const auto current = _langpack->id().replace("-raw", "");
-	if (current.isEmpty()) {
-		return base;
-	}
-	for (const auto language : languages) {
-		if (current == language || current.split(u'-')[0] == language) {
-			return base + "?setln=" + language;
-		}
-	}
-	return base;
+	return u"https://github.com/AyuGram/AyuGramDesktop/releases"_q;
 }
 
 bool Application::openCustomUrl(
@@ -1382,8 +1359,9 @@ Window::Controller *Application::windowForShowingHistory(
 
 Window::Controller *Application::windowForShowingForum(
 		not_null<Data::Forum*> forum) const {
+	const auto tabs = forum->channel()->useSubsectionTabs();
 	const auto id = Window::SeparateId(
-		Window::SeparateType::Forum,
+		tabs ? Window::SeparateType::Chat : Window::SeparateType::Forum,
 		forum->history());
 	if (const auto separate = separateWindowFor(id)) {
 		return separate;
@@ -1391,9 +1369,15 @@ Window::Controller *Application::windowForShowingForum(
 	auto result = (Window::Controller*)nullptr;
 	enumerateWindows([&](not_null<Window::Controller*> window) {
 		if (const auto controller = window->sessionController()) {
-			const auto current = controller->shownForum().current();
-			if (forum == current) {
-				result = window;
+			if (tabs) {
+				if (controller->windowId() == id) {
+					result = window;
+				}
+			} else {
+				const auto current = controller->shownForum().current();
+				if (forum == current) {
+					result = window;
+				}
 			}
 		}
 	});

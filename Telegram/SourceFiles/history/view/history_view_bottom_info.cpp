@@ -13,10 +13,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/painter.h"
+#include "core/ui_integration.h"
 #include "lang/lang_keys.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history.h"
+#include "history/view/media/history_view_media.h"
 #include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "chat_helpers/emoji_interactions.h"
@@ -28,11 +30,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_message_reactions.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h"
+#include "styles/style_credits.h"
 #include "styles/style_dialogs.h"
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
-#include "ayu/features/messageshot/message_shot.h"
+#include "ayu/features/message_shot/message_shot.h"
+#include "ayu/utils/telegram_helpers.h"
 #include "core/ui_integration.h"
 #include "styles/style_ayu_icons.h"
 
@@ -123,7 +127,7 @@ TextState BottomInfo::textState(
 	}
 	const auto textWidth = _authorEditedDate.maxWidth();
 	auto withTicksWidth = textWidth;
-	if (!AyuFeatures::MessageShot::isTakingShot() && _data.flags & (Data::Flag::OutLayout | Data::Flag::Sending)) {
+	if (!AyuFeatures::MessageShot::isTakingShot() && (_data.flags & (Data::Flag::OutLayout | Data::Flag::Sending))) {
 		withTicksWidth += st::historySendStateSpace;
 	}
 	if (!_views.isEmpty()) {
@@ -202,7 +206,7 @@ ClickHandlerPtr BottomInfo::replayEffectLink(
 	const auto weak = base::make_weak(view);
 	return std::make_shared<LambdaClickHandler>([=](ClickContext context) {
 		const auto my = context.other.value<ClickHandlerContext>();
-		if (const auto controller = my.sessionWindow.get()) {
+		if ([[maybe_unused]] const auto controller = my.sessionWindow.get()) {
 			if (const auto strong = weak.get()) {
 				strong->delegate()->elementStartEffect(strong, nullptr);
 			}
@@ -226,7 +230,7 @@ void BottomInfo::paint(
 
 	auto right = position.x() + width();
 	const auto firstLineBottom = position.y() + st::msgDateFont->height;
-	if (!AyuFeatures::MessageShot::isTakingShot() && _data.flags & Data::Flag::OutLayout) {
+	if (!AyuFeatures::MessageShot::isTakingShot() && (_data.flags & Data::Flag::OutLayout)) {
 		const auto &icon = (_data.flags & Data::Flag::Sending)
 			? (inverted
 				? st->historySendingInvertedIcon()
@@ -412,25 +416,20 @@ void BottomInfo::layout() {
 }
 
 void BottomInfo::layoutDateText() {
-	const auto settings = &AyuSettings::getInstance();
+	const auto &settings = AyuSettings::getInstance();
 
-	if (!settings->replaceBottomInfoWithIcons) {
+	if (!settings.replaceBottomInfoWithIcons) {
 		const auto deleted = (_data.flags & Data::Flag::AyuDeleted)
-								? (settings->deletedMark + ' ')
+								? (settings.deletedMark + ' ')
 								: QString();
 		const auto edited = (_data.flags & Data::Flag::Edited)
-								? (settings->editedMark + ' ')
+								? (settings.editedMark + ' ')
 								: (_data.flags & Data::Flag::EstimateDate)
 			? (tr::lng_approximate(tr::now) + ' ')
 			: QString();
 		const auto author = _data.author;
 		const auto prefix = !author.isEmpty() ? u", "_q : QString();
-		const auto date = edited + QLocale().toString(
-			_data.date.time(),
-			settings->showMessageSeconds
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove(" t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat)
-		);
+		const auto date = edited + formatMessageTime(_data.date.time());
 		const auto afterAuthor = prefix + date;
 		const auto afterAuthorWidth = st::msgDateFont->width(afterAuthor);
 		const auto authorWidth = st::msgDateFont->width(author);
@@ -447,10 +446,18 @@ void BottomInfo::layoutDateText() {
 			: name.isEmpty()
 			? (deleted + date)
 			: (deleted + name + afterAuthor);
-		_authorEditedDate.setText(
+		auto marked = TextWithEntities();
+	if (const auto count = _data.stars) {
+		marked.append(
+			Ui::Text::IconEmoji(&st::starIconEmojiSmall)
+		).append(Lang::FormatCountToShort(count).string).append(u", "_q);
+	}
+	marked.append(full);
+	_authorEditedDate.setMarkedText(
 			st::msgDateTextStyle,
-			full,
-			Ui::NameTextOptions());
+			marked,
+			Ui::NameTextOptions(),
+		Core::TextContext({ .session = &_reactionsOwner->session() }));
 	} else {
 		TextWithEntities deleted;
 		if (_data.flags & Data::Flag::AyuDeleted) {
@@ -483,12 +490,9 @@ void BottomInfo::layoutDateText() {
 		const auto author = _data.author;
 		const auto prefix = !author.isEmpty() ? (_data.flags & Data::Flag::Edited ? u" "_q : u", "_q) : QString();
 
-		const auto date = TextWithEntities{}.append(edited).append(QLocale().toString(
-			_data.date.time(),
-			settings->showMessageSeconds
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove(" t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat)
-		));
+		const auto date = TextWithEntities{}
+			.append(edited)
+			.append(formatMessageTime(_data.date.time()));
 
 		const auto afterAuthor = TextWithEntities{}.append(prefix).append(date);
 		const auto afterAuthorWidth = st::msgDateFont->width(afterAuthor.text);
@@ -511,11 +515,11 @@ void BottomInfo::layoutDateText() {
 			full.append(deleted).append(name).append(afterAuthor);
 		}
 
-		const auto context = Core::MarkedTextContext{
+		const auto context = Core::TextContext({
 			.session = &_reactionsOwner->session(),
-			.customEmojiRepaint = [] {},
+			.repaint = [] {},
 			.customEmojiLoopLimit = 0,
-		};
+		});
 
 		_authorEditedDate.setMarkedText(
 			st::msgDateTextStyle,
@@ -564,7 +568,7 @@ QSize BottomInfo::countOptimalSize() {
 		return { st::historyShortcutStateSpace, st::msgDateFont->height };
 	}
 	auto width = 0;
-	if (!AyuFeatures::MessageShot::isTakingShot() && _data.flags & (Data::Flag::OutLayout | Data::Flag::Sending)) {
+	if (!AyuFeatures::MessageShot::isTakingShot() && (_data.flags & (Data::Flag::OutLayout | Data::Flag::Sending))) {
 		width += st::historySendStateSpace;
 	}
 	width += _authorEditedDate.maxWidth();
@@ -686,6 +690,17 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 	}
 	if (item->isSending() || item->hasFailed()) {
 		result.flags |= Flag::Sending;
+	}
+	if (!item->history()->peer->isUser()) {
+		const auto media = message->media();
+		const auto mine = PaidInformation{
+			.messages = 1,
+			.stars = item->starsPaid(),
+		};
+		auto info = media ? media->paidInformation().value_or(mine) : mine;
+		if (const auto total = info.stars) {
+			result.stars = total;
+		}
 	}
 	const auto forwarded = item->Get<HistoryMessageForwarded>();
 	if (forwarded && forwarded->imported) {

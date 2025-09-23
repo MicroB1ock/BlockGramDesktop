@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+namespace style {
+struct DialogRightButton;
+} // namespace style
+
 namespace Ui {
 class RippleAnimation;
 } // namespace Ui
@@ -32,14 +36,10 @@ struct UnreadState {
 	int messagesMuted = 0;
 	int chats = 0;
 	int chatsMuted = 0;
-	int chatsTopic = 0;
-	int chatsTopicMuted = 0;
 	int marks = 0;
 	int marksMuted = 0;
 	int reactions = 0;
 	int reactionsMuted = 0;
-	int forums = 0;
-	int forumsMuted = 0;
 	int mentions = 0;
 	bool known = false;
 
@@ -48,14 +48,10 @@ struct UnreadState {
 		messagesMuted += other.messagesMuted;
 		chats += other.chats;
 		chatsMuted += other.chatsMuted;
-		chatsTopic += other.chatsTopic;
-		chatsTopicMuted += other.chatsTopicMuted;
 		marks += other.marks;
 		marksMuted += other.marksMuted;
 		reactions += other.reactions;
 		reactionsMuted += other.reactionsMuted;
-		forums += other.forums;
-		forumsMuted += other.forumsMuted;
 		mentions += other.mentions;
 		return *this;
 	}
@@ -64,14 +60,10 @@ struct UnreadState {
 		messagesMuted -= other.messagesMuted;
 		chats -= other.chats;
 		chatsMuted -= other.chatsMuted;
-		chatsTopic -= other.chatsTopic;
-		chatsTopicMuted -= other.chatsTopicMuted;
 		marks -= other.marks;
 		marksMuted -= other.marksMuted;
 		reactions -= other.reactions;
 		reactionsMuted -= other.reactionsMuted;
-		forums -= other.forums;
-		forumsMuted -= other.forumsMuted;
 		mentions -= other.mentions;
 		return *this;
 	}
@@ -101,6 +93,9 @@ struct BadgesState {
 	friend inline constexpr auto operator<=>(
 		BadgesState,
 		BadgesState) = default;
+	friend inline constexpr bool operator==(
+		BadgesState,
+		BadgesState) = default;
 
 	[[nodiscard]] bool empty() const {
 		return !unread && !mention && !reaction;
@@ -126,11 +121,16 @@ struct RowsByLetter {
 };
 
 struct RightButton final {
+	const style::DialogRightButton *st = nullptr;
 	QImage bg;
 	QImage selectedBg;
 	QImage activeBg;
 	Ui::Text::String text;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
+
+	explicit operator bool() const {
+		return st != nullptr;
+	}
 };
 
 } // namespace Dialogs

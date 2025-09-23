@@ -18,6 +18,7 @@
 #include <fstream>
 
 #include "ayu_worker.h"
+#include "features/translator/ayu_translator.h"
 #include "window/window_controller.h"
 
 using json = nlohmann::json;
@@ -40,6 +41,8 @@ rpl::variable<QString> deletedMarkReactive;
 rpl::variable<QString> editedMarkReactive;
 
 rpl::variable<int> showPeerIdReactive;
+
+rpl::variable<QString> translationProviderReactive;
 
 rpl::variable<bool> hideFromBlockedReactive;
 rpl::event_stream<> historyUpdateReactive;
@@ -137,6 +140,7 @@ void postinitialize() {
 	deletedMarkReactive = settings->deletedMark;
 	editedMarkReactive = settings->editedMark;
 	showPeerIdReactive = settings->showPeerId;
+	translationProviderReactive = settings->translationProvider;
 
 	hideFromBlockedReactive = settings->hideFromBlocked;
 
@@ -194,6 +198,15 @@ void save() {
 	postinitialize();
 }
 
+void reset() {
+	lifetime.destroy();
+	lifetime = rpl::lifetime();
+	settings = std::nullopt;
+	initialize();
+	postinitialize();
+	save();
+}
+
 AyuGramSettings::AyuGramSettings() {
 	// ~ Ghost essentials
 	sendReadMessages = true;
@@ -219,6 +232,7 @@ AyuGramSettings::AyuGramSettings() {
 	disableAds = true;
 	disableStories = false;
 	disableCustomBackgrounds = true;
+	showOnlyAddedEmojisAndStickers = false;
 	collapseSimilarChannels = true;
 	hideSimilarChannels = false;
 
@@ -228,8 +242,13 @@ AyuGramSettings::AyuGramSettings() {
 	increaseWebviewHeight = false;
 	increaseWebviewWidth = false;
 
+	materialSwitches = true;
+	removeMessageTail = false;
+
 	disableNotificationsDelay = false;
 	localPremium = false;
+	showChannelReactions = true;
+	showGroupReactions = true;
 
 	// ~ Customization
 	appIcon =
@@ -240,7 +259,8 @@ AyuGramSettings::AyuGramSettings() {
 #endif
 	;
 	simpleQuotesAndReplies = true;
-	replaceBottomInfoWithIcons = false;
+	hideFastShare = false;
+	replaceBottomInfoWithIcons = true;
 	deletedMark = "🧹";
 	editedMark = Core::IsAppLaunched() ? tr::lng_edited(tr::now) : QString("edited");
 	recentStickersCount = 100;
@@ -264,8 +284,17 @@ AyuGramSettings::AyuGramSettings() {
 	showAttachPopup = true;
 	showEmojiPopup = true;
 
+	// ~ Drawer Elements
+	showMyProfileInDrawer = true;
+	showBotsInDrawer = true;
+	showNewGroupInDrawer = true;
+	showNewChannelInDrawer = true;
+	showContactsInDrawer = true;
+	showCallsInDrawer = true;
+	showSavedMessagesInDrawer = true;
 	showLReadToggleInDrawer = false;
 	showSReadToggleInDrawer = true;
+	showNightModeToggleInDrawer = true;
 	showGhostToggleInDrawer = true;
 	showStreamerToggleInDrawer = false;
 
@@ -284,6 +313,7 @@ AyuGramSettings::AyuGramSettings() {
 		 * channelBottomButton = 2 means "Discuss" + fallback to "Mute"/"Unmute"
 	*/
 	channelBottomButton = 2;
+	quickAdminShortcuts = true;
 
 	/*
 		 * showPeerId = 0 means no ID shown
@@ -298,34 +328,38 @@ AyuGramSettings::AyuGramSettings() {
 	stickerConfirmation = false;
 	gifConfirmation = false;
 	voiceConfirmation = false;
+
+	translationProvider = "telegram"; // telegram, google, yandex
+
+	crashReporting = true;
 }
 
-void AyuGramSettings::set_sendReadMessages(bool val) {
-	sendReadMessages = val;
+void set_sendReadMessages(bool val) {
+	settings->sendReadMessages = val;
 	sendReadMessagesReactive = val;
 }
 
-void AyuGramSettings::set_sendReadStories(bool val) {
-	sendReadStories = val;
+void set_sendReadStories(bool val) {
+	settings->sendReadStories = val;
 	sendReadStoriesReactive = val;
 }
 
-void AyuGramSettings::set_sendOnlinePackets(bool val) {
-	sendOnlinePackets = val;
+void set_sendOnlinePackets(bool val) {
+	settings->sendOnlinePackets = val;
 	sendOnlinePacketsReactive = val;
 }
 
-void AyuGramSettings::set_sendUploadProgress(bool val) {
-	sendUploadProgress = val;
+void set_sendUploadProgress(bool val) {
+	settings->sendUploadProgress = val;
 	sendUploadProgressReactive = val;
 }
 
-void AyuGramSettings::set_sendOfflinePacketAfterOnline(bool val) {
-	sendOfflinePacketAfterOnline = val;
+void set_sendOfflinePacketAfterOnline(bool val) {
+	settings->sendOfflinePacketAfterOnline = val;
 	sendOfflinePacketAfterOnlineReactive = val;
 }
 
-void AyuGramSettings::set_ghostModeEnabled(bool val) {
+void set_ghostModeEnabled(bool val) {
 	set_sendReadMessages(!val);
 	set_sendReadStories(!val);
 	set_sendOnlinePackets(!val);
@@ -339,231 +373,300 @@ void AyuGramSettings::set_ghostModeEnabled(bool val) {
 	}
 }
 
-void AyuGramSettings::set_markReadAfterAction(bool val) {
-	markReadAfterAction = val;
+void set_markReadAfterAction(bool val) {
+	settings->markReadAfterAction = val;
 }
 
-void AyuGramSettings::set_useScheduledMessages(bool val) {
-	useScheduledMessages = val;
+void set_useScheduledMessages(bool val) {
+	settings->useScheduledMessages = val;
 }
 
-void AyuGramSettings::set_sendWithoutSound(bool val) {
-	sendWithoutSound = val;
+void set_sendWithoutSound(bool val) {
+	settings->sendWithoutSound = val;
 }
 
-void AyuGramSettings::set_saveDeletedMessages(bool val) {
-	saveDeletedMessages = val;
+void set_saveDeletedMessages(bool val) {
+	settings->saveDeletedMessages = val;
 }
 
-void AyuGramSettings::set_saveMessagesHistory(bool val) {
-	saveMessagesHistory = val;
+void set_saveMessagesHistory(bool val) {
+	settings->saveMessagesHistory = val;
 }
 
-void AyuGramSettings::set_saveForBots(bool val) {
-	saveForBots = val;
+void set_saveForBots(bool val) {
+	settings->saveForBots = val;
 }
 
-void AyuGramSettings::set_hideFromBlocked(bool val) {
-	hideFromBlocked = val;
+void set_hideFromBlocked(bool val) {
+	settings->hideFromBlocked = val;
 	hideFromBlockedReactive = val;
 }
 
-void AyuGramSettings::set_disableAds(bool val) {
-	disableAds = val;
+void set_disableAds(bool val) {
+	settings->disableAds = val;
 }
 
-void AyuGramSettings::set_disableStories(bool val) {
-	disableStories = val;
+void set_disableStories(bool val) {
+	settings->disableStories = val;
 }
 
-void AyuGramSettings::set_disableCustomBackgrounds(bool val) {
-	disableCustomBackgrounds = val;
+void set_disableCustomBackgrounds(bool val) {
+	settings->disableCustomBackgrounds = val;
 }
 
-void AyuGramSettings::set_collapseSimilarChannels(bool val) {
-	collapseSimilarChannels = val;
+void set_showOnlyAddedEmojisAndStickers(bool val) {
+	settings->showOnlyAddedEmojisAndStickers = val;
 }
 
-void AyuGramSettings::set_hideSimilarChannels(bool val) {
-	hideSimilarChannels = val;
+void set_collapseSimilarChannels(bool val) {
+	settings->collapseSimilarChannels = val;
 }
 
-void AyuGramSettings::set_wideMultiplier(double val) {
-	wideMultiplier = val;
+void set_hideSimilarChannels(bool val) {
+	settings->hideSimilarChannels = val;
 }
 
-void AyuGramSettings::set_spoofWebviewAsAndroid(bool val) {
-	spoofWebviewAsAndroid = val;
+void set_wideMultiplier(double val) {
+	settings->wideMultiplier = val;
 }
 
-void AyuGramSettings::set_increaseWebviewHeight(bool val) {
-	increaseWebviewHeight = val;
+void set_spoofWebviewAsAndroid(bool val) {
+	settings->spoofWebviewAsAndroid = val;
 }
 
-void AyuGramSettings::set_increaseWebviewWidth(bool val) {
-	increaseWebviewWidth = val;
+void set_increaseWebviewHeight(bool val) {
+	settings->increaseWebviewHeight = val;
 }
 
-void AyuGramSettings::set_disableNotificationsDelay(bool val) {
-	disableNotificationsDelay = val;
+void set_increaseWebviewWidth(bool val) {
+	settings->increaseWebviewWidth = val;
 }
 
-void AyuGramSettings::set_localPremium(bool val) {
-	localPremium = val;
+void set_materialSwitches(bool val) {
+	settings->materialSwitches = val;
 }
 
-void AyuGramSettings::set_appIcon(QString val) {
-	appIcon = std::move(val);
+void set_removeMessageTail(bool val) {
+	settings->removeMessageTail = val;
 }
 
-void AyuGramSettings::set_simpleQuotesAndReplies(bool val) {
-	simpleQuotesAndReplies = val;
+void set_disableNotificationsDelay(bool val) {
+	settings->disableNotificationsDelay = val;
 }
 
-void AyuGramSettings::set_replaceBottomInfoWithIcons(bool val) {
-	replaceBottomInfoWithIcons = val;
+void set_localPremium(bool val) {
+	settings->localPremium = val;
 }
 
-void AyuGramSettings::set_deletedMark(QString val) {
-	deletedMark = std::move(val);
-	deletedMarkReactive = deletedMark;
+void set_hideChannelReactions(bool val) {
+	settings->showChannelReactions = val;
 }
 
-void AyuGramSettings::set_editedMark(QString val) {
-	editedMark = std::move(val);
-	editedMarkReactive = editedMark;
+void set_hideGroupReactions(bool val) {
+	settings->showGroupReactions = val;
 }
 
-void AyuGramSettings::set_recentStickersCount(int val) {
-	recentStickersCount = val;
+void set_appIcon(const QString &val) {
+	settings->appIcon = val;
 }
 
-void AyuGramSettings::set_showReactionsPanelInContextMenu(int val) {
-	showReactionsPanelInContextMenu = val;
+void set_simpleQuotesAndReplies(bool val) {
+	settings->simpleQuotesAndReplies = val;
 }
 
-void AyuGramSettings::set_showViewsPanelInContextMenu(int val) {
-	showViewsPanelInContextMenu = val;
+void set_hideFastShare(bool val) {
+	settings->hideFastShare = val;
 }
 
-void AyuGramSettings::set_showHideMessageInContextMenu(int val) {
-	showHideMessageInContextMenu = val;
+void set_replaceBottomInfoWithIcons(bool val) {
+	settings->replaceBottomInfoWithIcons = val;
 }
 
-void AyuGramSettings::set_showUserMessagesInContextMenu(int val) {
-	showUserMessagesInContextMenu = val;
+void set_deletedMark(const QString &val) {
+	settings->deletedMark = val;
+	deletedMarkReactive = settings->deletedMark;
 }
 
-void AyuGramSettings::set_showMessageDetailsInContextMenu(int val) {
-	showMessageDetailsInContextMenu = val;
+void set_editedMark(const QString &val) {
+	settings->editedMark = val;
+	editedMarkReactive = settings->editedMark;
 }
 
-void AyuGramSettings::set_showAttachButtonInMessageField(bool val) {
-	showAttachButtonInMessageField = val;
+void set_recentStickersCount(int val) {
+	settings->recentStickersCount = val;
+}
+
+void set_showReactionsPanelInContextMenu(int val) {
+	settings->showReactionsPanelInContextMenu = val;
+}
+
+void set_showViewsPanelInContextMenu(int val) {
+	settings->showViewsPanelInContextMenu = val;
+}
+
+void set_showHideMessageInContextMenu(int val) {
+	settings->showHideMessageInContextMenu = val;
+}
+
+void set_showUserMessagesInContextMenu(int val) {
+	settings->showUserMessagesInContextMenu = val;
+}
+
+void set_showMessageDetailsInContextMenu(int val) {
+	settings->showMessageDetailsInContextMenu = val;
+}
+
+void set_showAttachButtonInMessageField(bool val) {
+	settings->showAttachButtonInMessageField = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showCommandsButtonInMessageField(bool val) {
-	showCommandsButtonInMessageField = val;
+void set_showCommandsButtonInMessageField(bool val) {
+	settings->showCommandsButtonInMessageField = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showEmojiButtonInMessageField(bool val) {
-	showEmojiButtonInMessageField = val;
+void set_showEmojiButtonInMessageField(bool val) {
+	settings->showEmojiButtonInMessageField = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showMicrophoneButtonInMessageField(bool val) {
-	showMicrophoneButtonInMessageField = val;
+void set_showMicrophoneButtonInMessageField(bool val) {
+	settings->showMicrophoneButtonInMessageField = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showAutoDeleteButtonInMessageField(bool val) {
-	showAutoDeleteButtonInMessageField = val;
+void set_showAutoDeleteButtonInMessageField(bool val) {
+	settings->showAutoDeleteButtonInMessageField = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showAttachPopup(bool val) {
-	showAttachPopup = val;
+void set_showAttachPopup(bool val) {
+	settings->showAttachPopup = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showEmojiPopup(bool val) {
-	showEmojiPopup = val;
+void set_showEmojiPopup(bool val) {
+	settings->showEmojiPopup = val;
 	triggerHistoryUpdate();
 }
 
-void AyuGramSettings::set_showLReadToggleInDrawer(bool val) {
-	showLReadToggleInDrawer = val;
+void set_showMyProfileInDrawer(bool val) {
+	settings->showMyProfileInDrawer = val;
 }
 
-void AyuGramSettings::set_showSReadToggleInDrawer(bool val) {
-	showSReadToggleInDrawer = val;
+void set_showBotsInDrawer(bool val) {
+	settings->showBotsInDrawer = val;
 }
 
-void AyuGramSettings::set_showGhostToggleInDrawer(bool val) {
-	showGhostToggleInDrawer = val;
+void set_showNewGroupInDrawer(bool val) {
+	settings->showNewGroupInDrawer = val;
 }
 
-void AyuGramSettings::set_showStreamerToggleInDrawer(bool val) {
-	showStreamerToggleInDrawer = val;
+void set_showNewChannelInDrawer(bool val) {
+	settings->showNewChannelInDrawer = val;
 }
 
-void AyuGramSettings::set_showGhostToggleInTray(bool val) {
-	showGhostToggleInTray = val;
+void set_showContactsInDrawer(bool val) {
+	settings->showContactsInDrawer = val;
 }
 
-void AyuGramSettings::set_showStreamerToggleInTray(bool val) {
-	showStreamerToggleInTray = val;
+void set_showCallsInDrawer(bool val) {
+	settings->showCallsInDrawer = val;
 }
 
-void AyuGramSettings::set_monoFont(QString val) {
-	monoFont = val;
+void set_showSavedMessagesInDrawer(bool val) {
+	settings->showSavedMessagesInDrawer = val;
 }
 
-void AyuGramSettings::set_showPeerId(int val) {
-	showPeerId = val;
+void set_showLReadToggleInDrawer(bool val) {
+	settings->showLReadToggleInDrawer = val;
+}
+
+void set_showSReadToggleInDrawer(bool val) {
+	settings->showSReadToggleInDrawer = val;
+}
+
+void set_showNightModeToggleInDrawer(bool val) {
+	settings->showNightModeToggleInDrawer = val;
+}
+
+void set_showGhostToggleInDrawer(bool val) {
+	settings->showGhostToggleInDrawer = val;
+}
+
+void set_showStreamerToggleInDrawer(bool val) {
+	settings->showStreamerToggleInDrawer = val;
+}
+
+void set_showGhostToggleInTray(bool val) {
+	settings->showGhostToggleInTray = val;
+}
+
+void set_showStreamerToggleInTray(bool val) {
+	settings->showStreamerToggleInTray = val;
+}
+
+void set_monoFont(const QString &val) {
+	settings->monoFont = val;
+}
+
+void set_showPeerId(int val) {
+	settings->showPeerId = val;
 	showPeerIdReactive = val;
 }
 
-void AyuGramSettings::set_hideNotificationCounters(bool val) {
-	hideNotificationCounters = val;
+void set_hideNotificationCounters(bool val) {
+	settings->hideNotificationCounters = val;
 }
 
-void AyuGramSettings::set_hideNotificationBadge(bool val) {
-	hideNotificationBadge = val;
+void set_hideNotificationBadge(bool val) {
+	settings->hideNotificationBadge = val;
 }
 
-void AyuGramSettings::set_hideAllChatsFolder(bool val) {
-	hideAllChatsFolder = val;
+void set_hideAllChatsFolder(bool val) {
+	settings->hideAllChatsFolder = val;
 }
 
-void AyuGramSettings::set_channelBottomButton(int val) {
-	channelBottomButton = val;
+void set_channelBottomButton(int val) {
+	settings->channelBottomButton = val;
 }
 
-void AyuGramSettings::set_showMessageSeconds(bool val) {
-	showMessageSeconds = val;
+void set_quickAdminShortcuts(bool val) {
+	settings->quickAdminShortcuts = val;
 }
 
-void AyuGramSettings::set_showMessageShot(bool val) {
-	showMessageShot = val;
+void set_showMessageSeconds(bool val) {
+	settings->showMessageSeconds = val;
 }
 
-void AyuGramSettings::set_stickerConfirmation(bool val) {
-	stickerConfirmation = val;
+void set_showMessageShot(bool val) {
+	settings->showMessageShot = val;
 }
 
-void AyuGramSettings::set_gifConfirmation(bool val) {
-	gifConfirmation = val;
+void set_stickerConfirmation(bool val) {
+	settings->stickerConfirmation = val;
 }
 
-void AyuGramSettings::set_voiceConfirmation(bool val) {
-	voiceConfirmation = val;
+void set_gifConfirmation(bool val) {
+	settings->gifConfirmation = val;
+}
+
+void set_voiceConfirmation(bool val) {
+	settings->voiceConfirmation = val;
+}
+
+void set_translationProvider(const QString &val) {
+	settings->translationProvider = val;
+	translationProviderReactive = val;
+	Ayu::Translator::TranslateManager::currentInstance()->resetCache();
+}
+
+void set_crashReporting(bool val) {
+	settings->crashReporting = val;
 }
 
 bool isUseScheduledMessages() {
-	const auto settings = &getInstance();
 	return isGhostModeActive() && settings->useScheduledMessages;
 }
 
@@ -581,6 +684,10 @@ rpl::producer<QString> get_editedMarkReactive() {
 
 rpl::producer<int> get_showPeerIdReactive() {
 	return showPeerIdReactive.value();
+}
+
+rpl::producer<QString> get_translationProviderReactive() {
+	return translationProviderReactive.value();
 }
 
 rpl::producer<bool> get_ghostModeEnabledReactive() {

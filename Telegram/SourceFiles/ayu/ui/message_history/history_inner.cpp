@@ -596,8 +596,9 @@ void InnerWidget::elementSearchInList(
 void InnerWidget::elementHandleViaClick(not_null<UserData*> bot) {
 }
 
-bool InnerWidget::elementIsChatWide() {
-	return _isChatWide;
+HistoryView::ElementChatMode InnerWidget::elementChatMode() {
+	using Mode = HistoryView::ElementChatMode;
+	return _isChatWide ? Mode::Wide : Mode::Default;
 }
 
 not_null<Ui::PathShiftGradient*> InnerWidget::elementPathShiftGradient() {
@@ -704,7 +705,7 @@ void InnerWidget::addMessages(Direction direction, const std::vector<AyuMessageB
 							? message.fakeId // viewing edited history
 							: message.messageId; // viewing deleted messages
 		if (_messageIds.find(id) != _messageIds.end()) {
-			return;
+			continue;
 		}
 		auto count = 0;
 		const auto addOne = [&](

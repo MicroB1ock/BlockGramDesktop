@@ -53,7 +53,7 @@ Result::Result(not_null<Main::Session*> session, const Creator &creator)
 , _type(creator.type) {
 }
 
-std::unique_ptr<Result> Result::Create(
+std::shared_ptr<Result> Result::Create(
 		not_null<Main::Session*> session,
 		uint64 queryId,
 		const MTPBotInlineResult &data) {
@@ -84,7 +84,7 @@ std::unique_ptr<Result> Result::Create(
 		return nullptr;
 	}
 
-	auto result = std::make_unique<Result>(
+	auto result = std::make_shared<Result>(
 		session,
 		Creator{ queryId, type });
 	const auto message = data.match([&](const MTPDbotInlineResult &data) {
@@ -347,9 +347,9 @@ bool Result::onChoose(Layout::ItemBase *layout) {
 Media::View::OpenRequest Result::openRequest() {
 	using namespace Media::View;
 	if (_document) {
-		return OpenRequest(nullptr, _document, nullptr, MsgId());
+		return OpenRequest(nullptr, _document, nullptr, MsgId(), PeerId());
 	} else if (_photo) {
-		return OpenRequest(nullptr, _photo, nullptr, MsgId());
+		return OpenRequest(nullptr, _photo, nullptr, MsgId(), PeerId());
 	}
 	return {};
 }

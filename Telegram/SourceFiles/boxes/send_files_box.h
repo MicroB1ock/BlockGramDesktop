@@ -102,6 +102,7 @@ struct SendFilesBoxDescriptor {
 	const style::ComposeControls *stOverride = nullptr;
 	SendFilesConfirmed confirmed;
 	Fn<void()> cancelled;
+	Fn<void(const TextWithTags &text)> cancelled2;
 };
 
 class SendFilesBox : public Ui::BoxContent {
@@ -117,7 +118,8 @@ public:
 		const TextWithTags &caption,
 		not_null<PeerData*> toPeer,
 		Api::SendType sendType,
-		SendMenu::Details sendMenuDetails);
+		SendMenu::Details sendMenuDetails,
+		Fn<void(const TextWithTags &text)> cancelled2 = nullptr);
 	SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor);
 
 	void setConfirmedCallback(SendFilesConfirmed callback) {
@@ -153,7 +155,9 @@ private:
 			int till,
 			Fn<bool()> gifPaused,
 			Ui::SendFilesWay way,
-			Fn<bool()> canToggleSpoiler);
+			Fn<bool(
+				const Ui::PreparedFile &,
+				Ui::AttachActionType)> actionAllowed);
 		Block(Block &&other) = default;
 		Block &operator=(Block &&other) = default;
 
@@ -164,6 +168,8 @@ private:
 		[[nodiscard]] rpl::producer<int> itemDeleteRequest() const;
 		[[nodiscard]] rpl::producer<int> itemReplaceRequest() const;
 		[[nodiscard]] rpl::producer<int> itemModifyRequest() const;
+		[[nodiscard]] rpl::producer<int> itemEditCoverRequest() const;
+		[[nodiscard]] rpl::producer<int> itemClearCoverRequest() const;
 		[[nodiscard]] rpl::producer<> orderUpdated() const;
 
 		void setSendWay(Ui::SendFilesWay way);
@@ -242,6 +248,7 @@ private:
 	void addPreparedAsyncFile(Ui::PreparedFile &&file);
 
 	void checkCharsLimitation();
+	void refreshMessagesCount();
 
 	[[nodiscard]] Fn<MenuDetails()> prepareSendMenuDetails(
 		const SendFilesBoxDescriptor &descriptor);
@@ -257,6 +264,7 @@ private:
 
 	Ui::PreparedList _list;
 	std::optional<int> _removingIndex;
+	rpl::variable<int> _messagesCount;
 
 	SendFilesLimits _limits = {};
 	Fn<MenuDetails()> _sendMenuDetails;
@@ -266,6 +274,7 @@ private:
 	SendFilesCheck _check;
 	SendFilesConfirmed _confirmedCallback;
 	Fn<void()> _cancelledCallback;
+	Fn<void(const TextWithTags &text)> _cancelled2Callback;
 	rpl::variable<uint64> _price = 0;
 	std::unique_ptr<Ui::RpWidget> _priceTag;
 	QImage _priceTagBg;
@@ -300,5 +309,11 @@ private:
 
 	QPointer<Ui::RoundButton> _send;
 	QPointer<Ui::RoundButton> _addFile;
+
+	// AyuGram files reordering
+
+	[[nodiscard]] bool isFileBlock(int i) const;
+	void moveFile(int from, int to);
+	void setupDragForBlock(not_null<Ui::RpWidget*> w, int index);
 
 };

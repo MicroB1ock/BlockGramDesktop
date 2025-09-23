@@ -25,10 +25,19 @@ void AddJumpToBeginningAction(PeerData *peerData,
 							  not_null<Window::SessionController*> sessionController,
 							  const Window::PeerMenuCallback &addCallback);
 
+void AddOpenChannelAction(PeerData *peerData,
+							  not_null<Window::SessionController*> sessionController,
+							  const Window::PeerMenuCallback &addCallback);
+void AddDeleteOwnMessagesAction(PeerData *peerData,
+								Data::ForumTopic* topic,
+								not_null<Window::SessionController*> sessionController,
+								const Window::PeerMenuCallback &addCallback);
+
 void AddHistoryAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 void AddHideMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 void AddUserMessagesAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 void AddMessageDetailsAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
+void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 
 }

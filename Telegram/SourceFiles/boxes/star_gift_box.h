@@ -7,15 +7,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_star_gift.h"
+
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
+
 namespace Data {
 struct UniqueGift;
 struct GiftCode;
 struct CreditsHistoryEntry;
+class SavedStarGiftId;
 } // namespace Data
+
+namespace Main {
+class Session;
+class SessionShow;
+} // namespace Main
 
 namespace Payments {
 enum class CheckoutResult;
 } // namespace Payments
+
+namespace Settings {
+struct GiftWearBoxStyleOverride;
+struct CreditsEntryBoxStyleOverrides;
+} // namespace Settings
 
 namespace Window {
 class SessionController;
@@ -27,6 +44,7 @@ class CustomEmoji;
 
 namespace Ui {
 
+class PopupMenu;
 class GenericBox;
 class VerticalLayout;
 
@@ -40,7 +58,34 @@ void ShowStarGiftBox(
 void AddUniqueGiftCover(
 	not_null<VerticalLayout*> container,
 	rpl::producer<Data::UniqueGift> data,
-	rpl::producer<QString> subtitleOverride = nullptr);
+	rpl::producer<QString> subtitleOverride = nullptr,
+	rpl::producer<int> resalePrice = nullptr,
+	Fn<void()> resaleClick = nullptr);
+void AddWearGiftCover(
+	not_null<VerticalLayout*> container,
+	const Data::UniqueGift &data,
+	not_null<PeerData*> peer);
+
+void ShowUniqueGiftWearBox(
+	std::shared_ptr<ChatHelpers::Show> show,
+	not_null<PeerData*> peer,
+	const Data::UniqueGift &gift,
+	Settings::GiftWearBoxStyleOverride st);
+
+void PreloadUniqueGiftResellPrices(not_null<Main::Session*> session);
+
+void UpdateGiftSellPrice(
+	std::shared_ptr<ChatHelpers::Show> show,
+	std::shared_ptr<Data::UniqueGift> unique,
+	Data::SavedStarGiftId savedId,
+	int price);
+void ShowUniqueGiftSellBox(
+	std::shared_ptr<ChatHelpers::Show> show,
+	std::shared_ptr<Data::UniqueGift> unique,
+	Data::SavedStarGiftId savedId,
+	Settings::GiftWearBoxStyleOverride st);
+
+void GiftReleasedByHandler(not_null<PeerData*> peer);
 
 struct PatternPoint {
 	QPointF position;
@@ -63,8 +108,8 @@ struct StarGiftUpgradeArgs {
 	not_null<Window::SessionController*> controller;
 	base::required<uint64> stargiftId;
 	Fn<void(bool)> ready;
-	not_null<UserData*> user;
-	MsgId itemId = 0;
+	not_null<PeerData*> peer;
+	Data::SavedStarGiftId savedId;
 	int cost = 0;
 	bool canAddSender = false;
 	bool canAddComment = false;
@@ -73,16 +118,37 @@ struct StarGiftUpgradeArgs {
 };
 void ShowStarGiftUpgradeBox(StarGiftUpgradeArgs &&args);
 
-void AddUniqueCloseButton(not_null<GenericBox*> box);
+void AddUniqueCloseButton(
+	not_null<GenericBox*> box,
+	Settings::CreditsEntryBoxStyleOverrides st,
+	Fn<void(not_null<PopupMenu*>)> fillMenu = nullptr);
 
+void SubmitStarsForm(
+	std::shared_ptr<Main::SessionShow> show,
+	MTPInputInvoice invoice,
+	uint64 formId,
+	uint64 price,
+	Fn<void(Payments::CheckoutResult, const MTPUpdates *)> done);
+void RequestStarsForm(
+	std::shared_ptr<Main::SessionShow> show,
+	MTPInputInvoice invoice,
+	Fn<void(
+		uint64 formId,
+		uint64 price,
+		std::optional<Payments::CheckoutResult> failure)> done);
 void RequestStarsFormAndSubmit(
-	not_null<Window::SessionController*> window,
+	std::shared_ptr<Main::SessionShow> show,
 	MTPInputInvoice invoice,
 	Fn<void(Payments::CheckoutResult, const MTPUpdates *)> done);
 
 void ShowGiftTransferredToast(
-	base::weak_ptr<Window::SessionController> weak,
+	std::shared_ptr<Main::SessionShow> show,
 	not_null<PeerData*> to,
-	const MTPUpdates &result);
+	const Data::UniqueGift &gift);
+
+void ShowResaleGiftBoughtToast(
+	std::shared_ptr<Main::SessionShow> show,
+	not_null<PeerData*> to,
+	const Data::UniqueGift &gift);
 
 } // namespace Ui

@@ -273,8 +273,9 @@ ReactionView::ReactionView(
 
 void ReactionView::setupCustomChatStylePalette() {
 	const auto color = uchar(_data.dark ? 255 : 0);
-	_chatStyle->historyTextInFg().set(color, color, color, 255);
-	_chatStyle->applyCustomPalette(_chatStyle.get());
+	Ui::ChatStyle custom{_chatStyle.get()};
+	custom.historyTextInFg().set(color, color, color, 255);
+	_chatStyle->applyCustomPalette(&custom);
 }
 
 void ReactionView::setAreaGeometry(QRect geometry, float64 radius) {
@@ -576,9 +577,10 @@ void WeatherView::setAreaGeometry(QRect geometry, float64 radius) {
 	const auto diagxdiag = (geometry.width() * geometry.width())
 		+ (geometry.height() * geometry.height());
 	const auto diag = std::sqrt(diagxdiag);
+	const auto shift = diag * 2 / 3.;
 	const auto topleft = QRectF(geometry).center()
-		- QPointF(diag / 2., diag / 2.);
-	const auto bottomright = topleft + QPointF(diag, diag);
+		- QPointF(shift, shift);
+	const auto bottomright = topleft + QPointF(shift, shift) * 2;
 	const auto left = int(std::floor(topleft.x()));
 	const auto top = int(std::floor(topleft.y()));
 	const auto right = int(std::ceil(bottomright.x()));
@@ -701,7 +703,7 @@ void WeatherView::cacheBackground() {
 	p.translate(-center);
 
 	const auto format = [](float64 value) {
-		return QString::number(int(base::SafeRound(value * 10)) / 10.);
+		return QString::number(int(base::SafeRound(value)));
 	};
 	const auto text = [&] {
 		const auto celsius = _data.millicelsius / 1000.;
@@ -712,11 +714,11 @@ void WeatherView::cacheBackground() {
 		return format(fahrenheit);
 	}().append(QChar(0xb0)).append(_celsius ? "C" : "F");
 	const auto metrics = QFontMetrics(_font);
-	const auto textWidth = metrics.horizontalAdvance(text);
-	_padding = int(_rect.height() / 6);
-	const auto fullWidth = (_emoji ? _emojiSize : 0)
+	const auto textWidth = qCeil(metrics.horizontalAdvance(text));
+	_padding = int(_rect.height() / 5);
+	const auto fullWidth = (_emoji ? (_emojiSize - _padding) : 0)
 		+ textWidth
-		+ (2 * _padding);
+		+ (4 * _padding);
 	const auto left = _rect.x() + (_rect.width() - fullWidth) / 2;
 	_wrapped = QRect(left, _rect.y(), fullWidth, _rect.height());
 
@@ -725,7 +727,7 @@ void WeatherView::cacheBackground() {
 	p.setPen(_fg);
 	p.setFont(_font);
 	p.drawText(_wrapped.marginsRemoved(
-		{ _padding + (_emoji ? _emojiSize : 0), 0, _padding, 0 }),
+		{ 2 * _padding + (_emoji ? (_emojiSize - _padding) : 0), 0, 2 * _padding, 0 }),
 		text,
 		style::al_center);
 }

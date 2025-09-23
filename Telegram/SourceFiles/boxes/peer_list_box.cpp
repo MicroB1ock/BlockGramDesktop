@@ -39,6 +39,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <xxhash.h> // XXH64.
 #include <QtWidgets/QApplication>
 
+// AyuGram includes
+#include "styles/style_ayu_icons.h"
+
+
 [[nodiscard]] PeerListRowId UniqueRowIdFromString(const QString &d) {
 	return XXH64(d.data(), d.size() * sizeof(ushort), 0);
 }
@@ -138,15 +142,16 @@ void PeerListBox::createMultiSelect() {
 		}
 	});
 	_select->resizeToWidth(_controller->contentWidth());
-	_select->moveToLeft(0, 0);
+	_select->moveToLeft(0, topSelectSkip());
 }
 
 void PeerListBox::appendQueryChangedCallback(Fn<void(QString)> callback) {
 	_customQueryChangedCallback = std::move(callback);
 }
 
-void PeerListBox::setAddedTopScrollSkip(int skip) {
+void PeerListBox::setAddedTopScrollSkip(int skip, bool aboveSearch) {
 	_addedTopScrollSkip = skip;
+	_addedTopScrollAboveSearch = aboveSearch;
 	_scrollBottomFixed = false;
 	updateScrollSkips();
 }
@@ -155,7 +160,7 @@ void PeerListBox::showFinished() {
 	_controller->showFinished();
 }
 
-int PeerListBox::getTopScrollSkip() const {
+int PeerListBox::topScrollSkip() const {
 	auto result = _addedTopScrollSkip;
 	if (_select && !_select->isHidden()) {
 		result += _select->height();
@@ -163,12 +168,19 @@ int PeerListBox::getTopScrollSkip() const {
 	return result;
 }
 
+int PeerListBox::topSelectSkip() const {
+	return _addedTopScrollAboveSearch ? _addedTopScrollSkip : 0;
+}
+
 void PeerListBox::updateScrollSkips() {
 	// If we show / hide the search field scroll top is fixed.
 	// If we resize search field by bubbles scroll bottom is fixed.
-	setInnerTopSkip(getTopScrollSkip(), _scrollBottomFixed);
-	if (_select && !_select->animating()) {
-		_scrollBottomFixed = true;
+	setInnerTopSkip(topScrollSkip(), _scrollBottomFixed);
+	if (_select) {
+		_select->moveToLeft(0, topSelectSkip());
+		if (!_select->animating()) {
+			_scrollBottomFixed = true;
+		}
 	}
 }
 
@@ -232,8 +244,6 @@ void PeerListBox::resizeEvent(QResizeEvent *e) {
 
 	if (_select) {
 		_select->resizeToWidth(width());
-		_select->moveToLeft(0, 0);
-
 		updateScrollSkips();
 	}
 
@@ -708,7 +718,7 @@ void PeerListRow::elementsPaint(
 }
 
 QString PeerListRow::generateName() {
-	return peer()->name();
+	return peer()->userpicPaintingPeer()->name();
 }
 
 QString PeerListRow::generateShortName() {
@@ -718,12 +728,12 @@ QString PeerListRow::generateShortName() {
 		? tr::lng_replies_messages(tr::now)
 		: _isVerifyCodesChat
 		? tr::lng_verification_codes(tr::now)
-		: peer()->shortName();
+		: peer()->userpicPaintingPeer()->shortName();
 }
 
 Ui::PeerUserpicView &PeerListRow::ensureUserpicView() {
-	if (!_userpic.cloud && peer()->hasUserpic()) {
-		_userpic = peer()->createUserpicView();
+	if (!_userpic.cloud && peer()->userpicPaintingPeer()->hasUserpic()) {
+		_userpic = peer()->userpicPaintingPeer()->createUserpicView();
 	}
 	return _userpic;
 }
@@ -732,7 +742,7 @@ PaintRoundImageCallback PeerListRow::generatePaintUserpicCallback(
 		bool forceRound) {
 	const auto saved = !_savedMessagesStatus.isEmpty();
 	const auto replies = _isRepliesMessagesChat;
-	const auto peer = this->peer();
+	const auto peer = this->peer()->userpicPaintingPeer();
 	auto userpic = saved ? Ui::PeerUserpicView() : ensureUserpicView();
 	if (forceRound && peer->isForum()) {
 		return ForceRoundUserpicCallback(peer);
@@ -800,10 +810,19 @@ int PeerListRow::paintNameIconGetWidth(
 		.verified = &(selected
 			? st::dialogsVerifiedIconOver
 			: st::dialogsVerifiedIcon),
+		.exteraOfficial = &(selected
+			? st::dialogsExteraOfficialIcon.over
+			: st::dialogsExteraOfficialIcon.icon),
+		.exteraSupporter = &(selected
+			? st::dialogsExteraSupporterIcon.over
+			: st::dialogsExteraSupporterIcon.icon),
 		.premium = &(selected
 			? st::dialogsPremiumIcon.over
 			: st::dialogsPremiumIcon.icon),
 		.scam = &(selected ? st::dialogsScamFgOver : st::dialogsScamFg),
+		.direct = &(selected
+			? st::windowSubTextFgOver
+			: st::windowSubTextFg),
 		.premiumFg = &(selected
 			? st::dialogsVerifiedIconBgOver
 			: st::dialogsVerifiedIconBg),
@@ -873,6 +892,7 @@ void PeerListRow::paintUserpic(
 	} else if (const auto callback = generatePaintUserpicCallback(false)) {
 		callback(p, x, y, outerWidth, st.photoSize);
 	}
+	paintUserpicOverlay(p, st, x, y, outerWidth);
 }
 
 // Emulates Ui::RoundImageCheckbox::paint() in a checked state.
@@ -912,7 +932,13 @@ void PeerListRow::paintDisabledCheckUserpic(
 
 		p.setPen(userpicBorderPen);
 		p.setBrush(Qt::NoBrush);
-		p.drawEllipse(userpicEllipse);
+		if (peer()->forum()) {
+			const auto radius = userpicDiameter
+				* Ui::ForumUserpicRadiusMultiplier();
+			p.drawRoundedRect(userpicEllipse, radius, radius);
+		} else {
+			p.drawEllipse(userpicEllipse);
+		}
 
 		p.setPen(iconBorderPen);
 		p.setBrush(st.disabledCheckFg);
@@ -1978,8 +2004,12 @@ PeerListContent::SkipResult PeerListContent::selectSkip(int direction) {
 	_selected.index.value = newSelectedIndex;
 	_selected.element = 0;
 	if (newSelectedIndex >= 0) {
-		auto top = (newSelectedIndex > 0) ? getRowTop(RowIndex(newSelectedIndex)) : 0;
+		auto top = (newSelectedIndex > 0) ? getRowTop(RowIndex(newSelectedIndex)) : _aboveHeight;
 		auto bottom = (newSelectedIndex + 1 < rowsCount) ? getRowTop(RowIndex(newSelectedIndex + 1)) : height();
+		_scrollToRequests.fire({ top, bottom });
+	} else if (!_selected.index.value && direction < 0) {
+		auto top = 0;
+		auto bottom = _aboveHeight;
 		_scrollToRequests.fire({ top, bottom });
 	}
 

@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
 #include "data/data_message_reactions.h"
+#include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
@@ -57,6 +58,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_window.h"
 
 #include <QtWidgets/QApplication>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
 
 namespace SendMenu {
 namespace {
@@ -522,8 +527,7 @@ void EffectPreview::setupSend(Details details) {
 		}, _actionWithEffect);
 	} else {
 		_premiumPromoLabel->entity()->setClickHandlerFilter([=](auto&&...) {
-			const auto window = _show->resolveWindow(
-				ChatHelpers::WindowUsage::PremiumPromo);
+			const auto window = _show->resolveWindow();
 			if (window) {
 				if (const auto onstack = _close) {
 					onstack();
@@ -691,10 +695,11 @@ FillMenuResult FillSendMenu(
 		: st::defaultComposeIcons;
 
 	if (sending && type != Type::Reminder) {
+		const auto &settings = AyuSettings::getInstance();
 		menu->addAction(
-			tr::lng_send_silent_message(tr::now),
+			settings.sendWithoutSound ? tr::ayu_SendWithSound(tr::now) : tr::lng_send_silent_message(tr::now),
 			[=] { action({ Api::SendOptions{ .silent = true } }, details); },
-			&icons.menuMute);
+			settings.sendWithoutSound ? &icons.menuUnmute : &icons.menuMute);
 	}
 	if (sending && type != Type::SilentOnly) {
 		menu->addAction(
@@ -925,13 +930,16 @@ void SetupUnreadReactionsMenu(
 			return;
 		}
 		const auto topic = thread->asTopic();
+		const auto sublist = thread->asSublist();
 		const auto peer = thread->peer();
 		const auto rootId = topic ? topic->rootId() : 0;
 		using Flag = MTPmessages_ReadReactions::Flag;
 		peer->session().api().request(MTPmessages_ReadReactions(
-			MTP_flags(rootId ? Flag::f_top_msg_id : Flag(0)),
+			MTP_flags((rootId ? Flag::f_top_msg_id : Flag(0))
+				| (sublist ? Flag::f_saved_peer_id : Flag(0))),
 			peer->input,
-			MTP_int(rootId)
+			MTP_int(rootId),
+			sublist ? sublist->sublistPeer()->input : MTPInputPeer()
 		)).done([=](const MTPmessages_AffectedHistory &result) {
 			const auto offset = peer->session().api().applyAffectedHistory(
 				peer,
@@ -940,7 +948,9 @@ void SetupUnreadReactionsMenu(
 				resend(weakThread, done, resend);
 			} else {
 				done();
-				peer->owner().history(peer)->clearUnreadReactionsFor(rootId);
+				peer->owner().history(peer)->clearUnreadReactionsFor(
+					rootId,
+					sublist);
 			}
 		}).fail(done).send();
 	};

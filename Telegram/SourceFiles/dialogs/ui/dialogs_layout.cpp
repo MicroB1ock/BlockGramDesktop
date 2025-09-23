@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/stickers/data_custom_emoji.h"
 #include "dialogs/dialogs_list.h"
 #include "dialogs/dialogs_three_state_icon.h"
+#include "dialogs/dialogs_quick_action.h"
 #include "dialogs/ui/dialogs_video_userpic.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -28,12 +29,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_unread_things.h"
 #include "history/view/history_view_item_preview.h"
 #include "history/view/history_view_send_action.h"
+#include "lang/lang_instance.h"
 #include "lang/lang_keys.h"
+#include "lottie/lottie_icon.h"
 #include "main/main_session.h"
 #include "storage/localstorage.h"
 #include "support/support_helper.h"
 #include "ui/empty_userpic.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "ui/power_saving.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_options.h"
@@ -43,6 +47,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "styles/style_widgets.h"
 #include "styles/style_window.h"
+
+// AyuGram includes
+#include "styles/style_ayu_icons.h"
+
 
 namespace Dialogs::Ui {
 namespace {
@@ -58,12 +66,12 @@ const auto kPsaBadgePrefix = "cloud_lng_badge_psa_";
 
 [[nodiscard]] bool ShowSendActionInDialogs(Data::Thread *thread) {
 	const auto history = thread ? thread->owningHistory().get() : nullptr;
-	if (!history) {
+	if (!history || thread->asSublist()) {
 		return false;
 	} else if (const auto user = history->peer->asUser()) {
 		return !user->lastseen().isHidden();
 	}
-	return !history->isForum();
+	return !history->isForum() && !history->amMonoforumAdmin();
 }
 
 void PaintRowTopRight(
@@ -85,16 +93,18 @@ void PaintRowTopRight(
 		text);
 }
 
-int PaintRightButton(QPainter &p, const PaintContext &context) {
+int PaintRightButtonImpl(QPainter &p, const PaintContext &context) {
 	if (context.width < st::columnMinimalWidthLeft) {
 		return 0;
 	}
 	if (const auto rightButton = context.rightButton) {
+		Assert(rightButton->st != nullptr);
+
 		const auto size = rightButton->bg.size() / style::DevicePixelRatio();
 		const auto left = context.width
 			- size.width()
-			- st::dialogRowOpenBotRight;
-		const auto top = st::dialogRowOpenBotTop;
+			- rightButton->st->margin.right();
+		const auto top = rightButton->st->margin.top();
 		p.drawImage(
 			left,
 			top,
@@ -109,22 +119,22 @@ int PaintRightButton(QPainter &p, const PaintContext &context) {
 				left,
 				top,
 				size.width() - size.height() / 2,
-				context.active
+				(context.active
 					? &st::universalRippleAnimation.color->c
-					: &st::activeButtonBgRipple->c);
+					: &rightButton->st->button.ripple.color->c));
 			if (rightButton->ripple->empty()) {
 				rightButton->ripple.reset();
 			}
 		}
 		p.setPen(context.active
-			? st::activeButtonBg
+			? rightButton->st->button.textBg
 			: context.selected
-			? st::activeButtonFgOver
-			: st::activeButtonFg);
+			? rightButton->st->button.textFgOver
+			: rightButton->st->button.textFg);
 		rightButton->text.draw(p, {
 			.position = QPoint(
 				left + size.height() / 2,
-				top + (st::dialogRowOpenBotHeight - rightButton->text.minHeight()) / 2),
+				top + rightButton->st->button.textTop),
 			.outerWidth = size.width() - size.height() / 2,
 			.availableWidth = size.width() - size.height() / 2,
 			.elisionLines = 1,
@@ -344,11 +354,29 @@ void PaintRow(
 		draft = nullptr;
 	}
 
+	const auto history = entry->asHistory();
+	const auto thread = entry->asThread();
+	const auto sublist = entry->asSublist();
+
 	auto bg = context.active
 		? st::dialogsBgActive
 		: context.selected
 		? st::dialogsBgOver
 		: context.currentBg;
+	auto swipeTranslation = 0;
+	if (history
+		&& context.quickActionContext
+		&& !context.quickActionContext->ripple
+		&& (history->peer->id.value
+			== context.quickActionContext->data.msgBareId)) {
+		if (context.quickActionContext->data.translation != 0) {
+			swipeTranslation = context.quickActionContext->data.translation
+				* -2;
+		}
+	}
+	if (swipeTranslation) {
+		p.translate(-swipeTranslation, 0);
+	}
 	p.fillRect(geometry, bg);
 	if (!(flags & Flag::TopicJumpRipple)) {
 		auto ripple = context.active
@@ -356,10 +384,6 @@ void PaintRow(
 			: st::dialogsRippleBg;
 		row->paintRipple(p, 0, 0, context.width, &ripple->c);
 	}
-
-	const auto history = entry->asHistory();
-	const auto thread = entry->asThread();
-	const auto sublist = entry->asSublist();
 
 	if (flags & Flag::SavedMessages) {
 		EmptyUserpic::PaintSavedMessages(
@@ -438,6 +462,11 @@ void PaintRow(
 
 	const auto promoted = (history && history->useTopPromotion())
 		&& !context.search;
+	const auto verifyInfo = (from
+		&& (!from->isSelf()
+			|| (!(flags & Flag::SavedMessages) && !(flags & Flag::MyNotes))))
+		? from->botVerifyDetails()
+		: nullptr;
 	if (promoted) {
 		const auto type = history->topPromotionType();
 		const auto custom = type.isEmpty()
@@ -449,10 +478,10 @@ void PaintRow(
 			? tr::lng_badge_psa_default(tr::now)
 			: custom;
 		PaintRowTopRight(p, text, rectForName, context);
-	} else if (const auto info = from ? from->botVerifyDetails() : nullptr) {
-		if (!rowBadge.ready(info)) {
+	} else if (verifyInfo) {
+		if (!rowBadge.ready(verifyInfo)) {
 			rowBadge.set(
-				info,
+				verifyInfo,
 				from->owner().customEmojiManager().factory(),
 				customEmojiRepaint);
 		}
@@ -577,10 +606,10 @@ void PaintRow(
 								{},
 								true))).append(std::move(draftText));
 				}
-				const auto context = Core::MarkedTextContext{
+				const auto context = Core::TextContext({
 					.session = &thread->session(),
-					.customEmojiRepaint = customEmojiRepaint,
-				};
+					.repaint = customEmojiRepaint,
+				});
 				cache.setMarkedText(
 					st::dialogsTextStyle,
 					std::move(draftText),
@@ -716,6 +745,14 @@ void PaintRow(
 				: context.selected
 				? &st::dialogsVerifiedIconOver
 				: &st::dialogsVerifiedIcon),
+			.exteraOfficial = &ThreeStateIcon(
+				st::dialogsExteraOfficialIcon,
+				context.active,
+				context.selected),
+			.exteraSupporter = &ThreeStateIcon(
+				st::dialogsExteraSupporterIcon,
+				context.active,
+				context.selected),
 			.premium = &ThreeStateIcon(
 				st::dialogsPremiumIcon,
 				context.active,
@@ -725,6 +762,11 @@ void PaintRow(
 				: context.selected
 				? &st::dialogsScamFgOver
 				: &st::dialogsScamFg),
+			.direct = (context.active
+				? &st::dialogsDraftFgActive
+				: context.selected
+				? &st::windowSubTextFgOver
+				: &st::windowSubTextFg),
 			.premiumFg = (context.active
 				? &st::dialogsVerifiedIconBgActive
 				: context.selected
@@ -818,6 +860,60 @@ void PaintRow(
 				+ (tag->width() / style::DevicePixelRatio());
 		}
 	}
+	if (swipeTranslation) {
+		p.translate(swipeTranslation, 0);
+		const auto swipeActionRect = QRect(
+			rect::right(geometry) - swipeTranslation,
+			geometry.y(),
+			swipeTranslation,
+			geometry.height());
+		p.setClipRegion(swipeActionRect);
+		const auto labelType = ResolveQuickDialogLabel(
+			history,
+			context.quickActionContext->action,
+			context.filter);
+		p.fillRect(swipeActionRect, ResolveQuickActionBg(labelType));
+		if (context.quickActionContext->data.reachRatio) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(ResolveQuickActionBgActive(labelType));
+			const auto r = swipeTranslation
+				* context.quickActionContext->data.reachRatio;
+			const auto offset = st::dialogsQuickActionSize
+				+ st::dialogsQuickActionSize / 2.;
+			p.drawEllipse(QPointF(geometry.width() - offset, offset), r, r);
+		}
+		const auto quickWidth = st::dialogsQuickActionSize * 3;
+		if (context.quickActionContext->icon) {
+			DrawQuickAction(
+				p,
+				QRect(
+					rect::right(geometry) - quickWidth,
+					geometry.y(),
+					quickWidth,
+					geometry.height()),
+				context.quickActionContext->icon.get(),
+				labelType);
+		}
+		p.setClipping(false);
+	}
+	if (const auto quick = context.quickActionContext;
+			quick && quick->ripple && quick->rippleFg) {
+		const auto labelType = ResolveQuickDialogLabel(
+			history,
+			context.quickActionContext->action,
+			context.filter);
+		const auto ripple = ResolveQuickActionBg(labelType);
+		const auto size = st::dialogsQuickActionRippleSize;
+		const auto x = geometry.width() - size;
+		quick->ripple->paint(p, x, 0, size, &ripple->c);
+		quick->rippleFg->paint(p, x, 0, size, &st::premiumButtonFg->c);
+		if (quick->ripple->empty()) {
+			quick->ripple.reset();
+		}
+		if (quick->rippleFg->empty()) {
+			quick->rippleFg.reset();
+		}
+	}
 }
 
 } // namespace
@@ -849,7 +945,7 @@ const style::icon *ChatTypeIcon(
 			st::dialogsForumIcon,
 			context.active,
 			context.selected);
-	} else {
+	} else if (!peer->isMonoforum()) {
 		return &ThreeStateIcon(
 			st::dialogsChatIcon,
 			context.active,
@@ -883,10 +979,12 @@ void RowPainter::Paint(
 		if (!thread) {
 			return nullptr;
 		}
-		if ((!peer || !peer->isForum()) && (!item || !badgesState.unread)) {
+		if ((!peer || (!peer->isForum() && !peer->amMonoforumAdmin()))
+			&& (!item || !badgesState.unread)) {
 			// Draw item, if there are unread messages.
 			const auto draft = thread->owningHistory()->cloudDraft(
-				thread->topicRootId());
+				thread->topicRootId(),
+				thread->monoforumPeerId());
 			if (!Data::DraftIsNull(draft)) {
 				return draft;
 			}
@@ -915,11 +1013,11 @@ void RowPainter::Paint(
 			? history->peer->migrateTo()
 			: history->peer.get())
 		: sublist
-		? sublist->peer().get()
+		? sublist->sublistPeer().get()
 		: nullptr;
 	const auto allowUserOnline = true;// !context.narrow || badgesState.empty();
 	const auto flags = (allowUserOnline ? Flag::AllowUserOnline : Flag(0))
-		| ((sublist && from->isSelf())
+		| ((sublist && !sublist->parentChat() && from->isSelf())
 			? Flag::MyNotes
 			: (peer && peer->isSelf())
 			? Flag::SavedMessages
@@ -967,21 +1065,23 @@ void RowPainter::Paint(
 			? nullptr
 			: thread
 			? &thread->lastItemDialogsView()
-			: sublist
-			? &sublist->lastItemDialogsView()
 			: nullptr;
 		if (view) {
-			const auto forum = context.st->topicsHeight
-				? row->history()->peer->forum()
+			const auto forum = (peer && context.st->topicsHeight)
+				? peer->forum()
 				: nullptr;
-			if (!view->prepared(item, forum)) {
+			const auto monoforum = (peer && context.st->topicsHeight)
+				? peer->monoforum()
+				: nullptr;
+			if (!view->prepared(item, forum, monoforum)) {
 				view->prepare(
 					item,
 					forum,
+					monoforum,
 					[=] { entry->updateChatListEntry(); },
 					{});
 			}
-			if (forum) {
+			if (forum || monoforum) {
 				rect.setHeight(context.st->topicsHeight + rect.height());
 			}
 			view->paint(p, rect, context);
@@ -1075,8 +1175,13 @@ void RowPainter::Paint(
 			availableWidth,
 			st::dialogsTextFont->height);
 		auto &view = row->itemView();
-		if (!view.prepared(item, nullptr)) {
-			view.prepare(item, nullptr, row->repaint(), previewOptions);
+		if (!view.prepared(item, nullptr, nullptr)) {
+			view.prepare(
+				item,
+				nullptr,
+				nullptr,
+				row->repaint(),
+				previewOptions);
 		}
 		view.paint(p, itemRect, context);
 	};
@@ -1172,6 +1277,10 @@ void PaintCollapsedRow(
 			unreadTop,
 			st);
 	}
+}
+
+int PaintRightButton(QPainter &p, const PaintContext &context) {
+	return PaintRightButtonImpl(p, context);
 }
 
 } // namespace Dialogs::Ui

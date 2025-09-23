@@ -8,9 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 
 #include "api/api_credits.h"
+#include "api/api_global_privacy.h"
 #include "api/api_sensitive_content.h"
 #include "api/api_statistics.h"
+#include "base/timer_rpl.h"
 #include "storage/localstorage.h"
+#include "storage/storage_account.h"
 #include "storage/storage_user_photos.h"
 #include "main/main_session.h"
 #include "data/business/data_business_common.h"
@@ -487,8 +490,8 @@ bool UserData::isFake() const {
 
 bool UserData::isPremium() const {
 	if (id) {
-		auto settings = &AyuSettings::getInstance();
-		if (settings->localPremium) {
+		const auto &settings = AyuSettings::getInstance();
+		if (settings.localPremium) {
 			if (getSession(id.value)) {
 				return true;
 			}
@@ -526,24 +529,40 @@ bool UserData::hasStoriesHidden() const {
 	return (flags() & UserDataFlag::StoriesHidden);
 }
 
-bool UserData::someRequirePremiumToWrite() const {
-	return (flags() & UserDataFlag::SomeRequirePremiumToWrite);
+bool UserData::hasRequirePremiumToWrite() const {
+	return (flags() & UserDataFlag::HasRequirePremiumToWrite);
 }
 
-bool UserData::meRequiresPremiumToWrite() const {
-	return !isSelf() && (flags() & UserDataFlag::MeRequiresPremiumToWrite);
+bool UserData::hasStarsPerMessage() const {
+	return (flags() & UserDataFlag::HasStarsPerMessage);
 }
 
-bool UserData::requirePremiumToWriteKnown() const {
-	return (flags() & UserDataFlag::RequirePremiumToWriteKnown);
+bool UserData::requiresPremiumToWrite() const {
+	return !isSelf() && (flags() & UserDataFlag::RequiresPremiumToWrite);
 }
 
-bool UserData::canSendIgnoreRequirePremium() const {
+bool UserData::messageMoneyRestrictionsKnown() const {
+	return (flags() & UserDataFlag::MessageMoneyRestrictionsKnown);
+}
+
+bool UserData::canSendIgnoreMoneyRestrictions() const {
 	return !isInaccessible() && !isRepliesChat() && !isVerifyCodes();
 }
 
 bool UserData::readDatesPrivate() const {
 	return (flags() & UserDataFlag::ReadDatesPrivate);
+}
+
+int UserData::starsPerMessage() const {
+	return _starsPerMessage;
+}
+
+void UserData::setStarsPerMessage(int stars) {
+	if (_starsPerMessage != stars) {
+		_starsPerMessage = stars;
+		session().changes().peerUpdated(this, UpdateFlag::StarsPerMessage);
+	}
+	checkTrustedPayForMessage();
 }
 
 bool UserData::canAddContact() const {
@@ -624,7 +643,6 @@ void UserData::setCallsStatus(CallsStatus callsStatus) {
 	}
 }
 
-
 Data::Birthday UserData::birthday() const {
 	return _birthday;
 }
@@ -655,6 +673,13 @@ void UserData::setBirthday(const tl::conditional<MTPBirthday> &value) {
 bool UserData::hasCalls() const {
 	return (callsStatus() != CallsStatus::Disabled)
 		&& (callsStatus() != CallsStatus::Unknown);
+}
+
+void UserData::setDisallowedGiftTypes(Api::DisallowedGiftTypes types) {
+	if (_disallowedGiftTypes != types) {
+		_disallowedGiftTypes = types;
+		session().changes().peerUpdated(this, UpdateFlag::GiftSettings);
+	}
 }
 
 namespace Data {
@@ -699,6 +724,8 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 	if (const auto pinned = update.vpinned_msg_id()) {
 		SetTopPinnedMessageId(user, pinned->v);
 	}
+	user->setStarsPerMessage(
+		update.vsend_paid_messages_stars().value_or_empty());
 	using Flag = UserDataFlag;
 	const auto mask = Flag::Blocked
 		| Flag::HasPhoneCalls
@@ -706,8 +733,12 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 		| Flag::CanPinMessages
 		| Flag::VoiceMessagesForbidden
 		| Flag::ReadDatesPrivate
-		| Flag::RequirePremiumToWriteKnown
-		| Flag::MeRequiresPremiumToWrite;
+		| (update.is_contact_require_premium()
+			? Flag::HasRequirePremiumToWrite
+			: Flag())
+		| (user->starsPerMessage() ? Flag::HasStarsPerMessage : Flag())
+		| Flag::MessageMoneyRestrictionsKnown
+		| Flag::RequiresPremiumToWrite;
 	user->setFlags((user->flags() & ~mask)
 		| (update.is_phone_calls_private()
 			? Flag::PhoneCallsPrivate
@@ -719,9 +750,10 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 			? Flag::VoiceMessagesForbidden
 			: Flag())
 		| (update.is_read_dates_private() ? Flag::ReadDatesPrivate : Flag())
-		| Flag::RequirePremiumToWriteKnown
+		| (user->starsPerMessage() ? Flag::HasStarsPerMessage : Flag())
+		| Flag::MessageMoneyRestrictionsKnown
 		| (update.is_contact_require_premium()
-			? Flag::MeRequiresPremiumToWrite
+			? (Flag::RequiresPremiumToWrite | Flag::HasRequirePremiumToWrite)
 			: Flag()));
 	user->setIsBlocked(update.is_blocked());
 	user->setCallsStatus(update.is_phone_calls_private()
@@ -755,6 +787,7 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 				Data::PeerUpdate::Flag::Rights);
 		}
 		if (info->canEditInformation) {
+			static constexpr auto kTimeout = crl::time(60000);
 			const auto id = user->id;
 			const auto weak = base::make_weak(&user->session());
 			const auto creditsLoadLifetime
@@ -764,23 +797,30 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 			creditsLoad->request({}, [=](Data::CreditsStatusSlice slice) {
 				if (const auto strong = weak.get()) {
 					strong->credits().apply(id, slice.balance);
-					creditsLoadLifetime->destroy();
 				}
+				creditsLoadLifetime->destroy();
 			});
+			base::timer_once(kTimeout) | rpl::start_with_next([=] {
+				creditsLoadLifetime->destroy();
+			}, *creditsLoadLifetime);
 			const auto currencyLoadLifetime
 				= std::make_shared<rpl::lifetime>();
 			const auto currencyLoad
 				= currencyLoadLifetime->make_state<Api::EarnStatistics>(user);
-			currencyLoad->request(
-			) | rpl::start_with_error_done([=](const QString &error) {
-				currencyLoadLifetime->destroy();
-			}, [=] {
+			const auto apply = [=](const CreditsAmount &balance) {
 				if (const auto strong = weak.get()) {
-					strong->credits().applyCurrency(
-						id,
-						currencyLoad->data().currentBalance);
-					currencyLoadLifetime->destroy();
+					strong->credits().applyCurrency(id, balance);
 				}
+				currencyLoadLifetime->destroy();
+			};
+			currencyLoad->request() | rpl::start_with_error_done(
+				[=](const QString &error) {
+					apply(CreditsAmount(0, CreditsType::Ton));
+				},
+				[=] { apply(currencyLoad->data().currentBalance); },
+				*currencyLoadLifetime);
+			base::timer_once(kTimeout) | rpl::start_with_next([=] {
+				currencyLoadLifetime->destroy();
 			}, *currencyLoadLifetime);
 		}
 	}
@@ -811,6 +851,31 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 	user->setBotVerifyDetails(
 		ParseBotVerifyDetails(update.vbot_verification()));
 
+	if (const auto gifts = update.vdisallowed_gifts()) {
+		const auto &data = gifts->data();
+		user->setDisallowedGiftTypes(Api::DisallowedGiftType()
+			| (data.is_disallow_unlimited_stargifts()
+				? Api::DisallowedGiftType::Unlimited
+				: Api::DisallowedGiftType())
+			| (data.is_disallow_limited_stargifts()
+				? Api::DisallowedGiftType::Limited
+				: Api::DisallowedGiftType())
+			| (data.is_disallow_unique_stargifts()
+				? Api::DisallowedGiftType::Unique
+				: Api::DisallowedGiftType())
+			| (data.is_disallow_premium_gifts()
+				? Api::DisallowedGiftType::Premium
+				: Api::DisallowedGiftType())
+			| (update.is_display_gifts_button()
+				? Api::DisallowedGiftType::SendHide
+				: Api::DisallowedGiftType()));
+	} else {
+		user->setDisallowedGiftTypes(Api::DisallowedGiftTypes()
+			| (update.is_display_gifts_button()
+				? Api::DisallowedGiftType::SendHide
+				: Api::DisallowedGiftType()));
+	}
+
 	user->owner().stories().apply(user, update.vstories());
 
 	user->fullUpdated();
@@ -824,9 +889,8 @@ StarRefProgram ParseStarRefProgram(const MTPStarRefProgram *program) {
 	const auto &data = program->data();
 	result.commission = data.vcommission_permille().v;
 	result.durationMonths = data.vduration_months().value_or_empty();
-	result.revenuePerUser = data.vdaily_revenue_per_user()
-		? Data::FromTL(*data.vdaily_revenue_per_user())
-		: StarsAmount();
+	result.revenuePerUser = CreditsAmountFromTL(
+		data.vdaily_revenue_per_user());
 	result.endDate = data.vend_date().value_or_empty();
 	return result;
 }

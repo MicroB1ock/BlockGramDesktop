@@ -370,7 +370,7 @@ bool RepliesList::buildFromData(not_null<Viewer*> viewer) {
 	const auto around = [&] {
 		if (viewer->around != ShowAtUnreadMsgId) {
 			return viewer->around;
-		} else if (const auto item = lookupRoot()) {
+		} else if (lookupRoot()) {
 			return computeInboxReadTillFull();
 		} else if (_owningTopic) {
 			// Somehow we don't want always to jump to computed inboxReadTill
@@ -1005,8 +1005,8 @@ void RepliesList::sendReadTillRequest() {
 	const auto api = &_history->session().api();
 	api->request(base::take(_readRequestId)).cancel();
 
-	const auto settings = &AyuSettings::getInstance();
-	if (!settings->sendReadMessages) {
+	const auto &settings = AyuSettings::getInstance();
+	if (!settings.sendReadMessages) {
 		return;
 	}
 

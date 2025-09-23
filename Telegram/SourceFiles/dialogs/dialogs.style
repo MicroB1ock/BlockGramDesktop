@@ -24,6 +24,10 @@ DialogRow {
 	unreadMarkDiameter: pixels;
 	tagTop: pixels;
 }
+DialogRightButton {
+	button: RoundButton;
+	margin: margins;
+}
 
 ThreeStateIcon {
 	icon: icon;
@@ -115,11 +119,16 @@ dialogRowFilterTagSkip: 4px;
 dialogRowFilterTagStyle: TextStyle(defaultTextStyle) {
 	font: font(10px);
 }
-dialogRowOpenBotTextStyle: semiboldTextStyle;
-dialogRowOpenBotHeight: 20px;
-dialogRowOpenBotRight: 10px;
-dialogRowOpenBotTop: 32px;
-dialogRowOpenBotRecentTop: 28px;
+dialogRowOpenBot: DialogRightButton {
+	button: RoundButton(defaultActiveButton) {
+		height: 20px;
+		textTop: 1px;
+	}
+	margin: margins(0px, 32px, 10px, 0px);
+}
+dialogRowOpenBotRecent: DialogRightButton(dialogRowOpenBot) {
+	margin: margins(0px, 32px, 16px, 0px);
+}
 
 forumDialogJumpArrow: icon{{ "dialogs/dialogs_topic_arrow", dialogsTextFg }};
 forumDialogJumpArrowOver: icon{{ "dialogs/dialogs_topic_arrow", dialogsTextFgOver }};
@@ -234,6 +243,17 @@ dialogsEmptyLabel: FlatLabel(defaultFlatLabel) {
 	minWidth: 32px;
 	align: align(top);
 	textFg: windowSubTextFg;
+}
+dialogEmptyButton: RoundButton(defaultActiveButton) {
+}
+dialogEmptyButtonSkip: 12px;
+dialogEmptyButtonLabel: FlatLabel(defaultFlatLabel) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(boxFontSize semibold);
+	}
+	minWidth: 32px;
+	align: align(top);
+	textFg: windowFg;
 }
 
 dialogsMenuToggle: IconButton {
@@ -491,8 +511,8 @@ dialogsLoadMoreLoading: InfiniteRadialAnimation(defaultInfiniteRadialAnimation) 
 }
 
 dialogsSearchInHeight: 38px;
-dialogsSearchInPhotoSize: 26px;
-dialogsSearchInPhotoPadding: 12px;
+dialogsSearchInPhotoSize: 28px;
+dialogsSearchInPhotoPadding: 10px;
 dialogsSearchInSkip: 10px;
 dialogsSearchInNameTop: 9px;
 dialogsSearchInDownTop: 15px;
@@ -790,6 +810,24 @@ dialogsPopularAppsAbout: FlatLabel(boxDividerLabel) {
 	minWidth: 128px;
 }
 
-foldersMenu: Menu(menuWithIcons) {
-	itemPadding: margins(54px, 8px, 44px, 8px);
+dialogsQuickActionSize: 20px;
+dialogsQuickActionRippleSize: 80px;
+
+dialogsSponsoredButton: DialogRightButton(dialogRowOpenBot) {
+	button: RoundButton(defaultLightButton) {
+		textFg: windowActiveTextFg;
+		textFgOver: windowActiveTextFg;
+		textBg: lightButtonBgOver;
+		textBgOver: lightButtonBgOver;
+		height: 20px;
+		textTop: 1px;
+	}
+	margin: margins(0px, 9px, 10px, 0px);
+}
+
+dialogsTopBarSuggestionTitleStyle: TextStyle(defaultTextStyle) {
+	font: font(semibold 12px);
+}
+dialogsTopBarSuggestionAboutStyle: TextStyle(defaultTextStyle) {
+	font: font(11px);
 }

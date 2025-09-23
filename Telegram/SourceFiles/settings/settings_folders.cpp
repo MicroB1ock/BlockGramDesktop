@@ -199,11 +199,11 @@ void FilterRowButton::updateData(
 		st::contactsNameStyle,
 		title.text,
 		kMarkupTextOptions,
-		Core::MarkedTextContext{
+		Core::TextContext({
 			.session = _session,
-			.customEmojiRepaint = [=] { update(); },
+			.repaint = [=] { update(); },
 			.customEmojiLoopLimit = title.isStatic ? -1 : 0,
-		});
+		}));
 	_icon = Ui::ComputeFilterIcon(filter);
 	_colorIndex = filter.colorIndex();
 	if (!ignoreCount) {
@@ -911,7 +911,7 @@ void SetupTagContent(
 
 	const auto send = [=, weak = Ui::MakeWeak(tagsButton)](bool checked) {
 		session->data().chatsFilters().requestToggleTags(checked, [=] {
-			if (const auto strong = weak.data()) {
+			if ([[maybe_unused]] const auto strong = weak.data()) {
 				state->tagsTurnOff.fire(!checked);
 			}
 		});

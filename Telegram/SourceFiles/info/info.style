@@ -477,6 +477,7 @@ infoIconMediaAudio: icon {{ "info/info_media_audio", infoIconFg }};
 infoIconMediaLink: icon {{ "info/info_media_link", infoIconFg }};
 infoIconMediaGroup: icon {{ "info/info_common_groups", infoIconFg }};
 infoIconMediaChannel: icon {{ "menu/channel", infoIconFg, point(4px, 4px) }};
+infoIconMediaBot: icon {{ "menu/bot", infoIconFg, point(4px, 4px) }};
 infoIconMediaVoice: icon {{ "info/info_media_voice", infoIconFg }};
 infoIconMediaStories: icon {{ "info/info_media_stories", infoIconFg }};
 infoIconMediaSaved: icon {{ "info/info_media_saved", infoIconFg }};
@@ -571,12 +572,12 @@ infoBlockButton: SettingsButton(infoProfileButton) {
 	textFg: attentionButtonFg;
 	textFgOver: attentionButtonFgOver;
 }
-infoCreateLinkedChatButton: SettingsButton(infoProfileButton) {
+infoCreateDiscussionLinkButton: SettingsButton(infoProfileButton) {
 	padding: margins(74px, 10px, 8px, 8px);
 	textFg: lightButtonFg;
 	textFgOver: lightButtonFgOver;
 }
-infoUnlinkChatButton: SettingsButton(infoCreateLinkedChatButton) {
+infoUnlinkDiscussionLinkButton: SettingsButton(infoCreateDiscussionLinkButton) {
 	textFg: attentionButtonFg;
 	textFgOver: attentionButtonFgOver;
 }
@@ -730,8 +731,8 @@ manageDeleteGroupButton: SettingsCountButton(manageGroupNoIconButton) {
 manageGroupReactions: IconButton(defaultIconButton) {
 	width: 24px;
 	height: 36px;
-	icon: icon{{ "info/edit/stickers_add", historyComposeIconFg }};
-	iconOver: icon{{ "info/edit/stickers_add", historyComposeIconFgOver }};
+	icon: icon{{ "menu/add", historyComposeIconFg }};
+	iconOver: icon{{ "menu/add", historyComposeIconFgOver }};
 }
 manageGroupReactionsField: InputField(defaultInputField) {
 	textMargins: margins(1px, 12px, 24px, 8px);
@@ -1163,9 +1164,26 @@ infoHoursOuter: RoundButton(defaultActiveButton) {
 }
 infoHoursOuterMargin: margins(8px, 4px, 8px, 4px);
 infoHoursDaySkip: 6px;
+infoHoursArrowSize: 4px;
 
 infoSharedMediaScroll: ScrollArea(defaultScrollArea) {
 	round: 1px;
 	width: 5px;
 	deltax: 2px;
 }
+
+infoGiftTooltip: ImportantTooltip(defaultImportantTooltip) {
+	margin: margins(4px, 4px, 4px, 4px);
+	padding: margins(8px, 2px, 8px, 3px);
+}
+infoGiftTooltipFont: font(11px semibold);
+
+topicsLayoutButtonLabel: FlatLabel(defaultFlatLabel) {
+	style: semiboldTextStyle;
+	margin: margins(10px, 4px, 10px, 4px);
+	textFg: windowSubTextFg;
+}
+topicsLayoutButtonIconPadding: margins(4px, 0px, 4px, 0px);
+topicsLayoutButtonIconSize: 140px;
+topicsLayoutButtonPadding: margins(4px, 0px, 4px, 12px);
+topicsLayoutButtonSkip: 0px;

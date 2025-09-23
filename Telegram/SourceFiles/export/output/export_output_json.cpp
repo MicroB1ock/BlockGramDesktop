@@ -385,6 +385,7 @@ QByteArray SerializeMessage(
 	};
 	const auto pushPhoto = [&](const Image &image) {
 		pushPath(image.file, "photo");
+		push("photo_file_size", image.file.size);
 		if (image.width && image.height) {
 			push("width", image.width);
 			push("height", image.height);
@@ -460,20 +461,27 @@ QByteArray SerializeMessage(
 		}
 	}, [&](const ActionPhoneCall &data) {
 		pushActor();
-		pushAction("phone_call");
+		pushAction(data.conferenceId ? "conference_call" : "phone_call");
 		if (data.duration) {
 			push("duration_seconds", data.duration);
 		}
-		using Reason = ActionPhoneCall::DiscardReason;
-		push("discard_reason", [&] {
-			switch (data.discardReason) {
-			case Reason::Busy: return "busy";
-			case Reason::Disconnect: return "disconnect";
-			case Reason::Hangup: return "hangup";
-			case Reason::Missed: return "missed";
-			}
-			return "";
-		}());
+		using State = ActionPhoneCall::State;
+		if (data.conferenceId) {
+			push("is_active", data.state == State::Active);
+			push("is_missed", data.state == State::Missed);
+		} else {
+			push("discard_reason", [&] {
+				switch (data.state) {
+				case State::Busy: return "busy";
+				case State::Disconnect: return "disconnect";
+				case State::Hangup: return "hangup";
+				case State::Missed: return "missed";
+				case State::MigrateConferenceCall:
+					return "migrate_conference_all";
+				}
+				return "";
+			}());
+		}
 	}, [&](const ActionScreenshotTaken &data) {
 		pushActor();
 		pushAction("take_screenshot");
@@ -636,14 +644,17 @@ QByteArray SerializeMessage(
 		pushBare("peer_name", wrapPeerName(data.peerId));
 		push("peer_id", data.peerId);
 		push("charge_id", data.transactionId);
-	}, [&](const ActionGiftStars &data) {
+	}, [&](const ActionGiftCredits &data) {
 		pushActor();
-		pushAction("send_stars_gift");
+		pushAction(data.amount.ton()
+			? "send_ton_gift"
+			: "send_stars_gift");
 		if (!data.cost.isEmpty()) {
 			push("cost", data.cost);
 		}
-		if (data.credits) {
-			push("stars", data.credits);
+		if (data.amount) {
+			push("amount_whole", data.amount.whole());
+			push("amount_nano", data.amount.nano());
 		}
 	}, [&](const ActionPrizeStars &data) {
 		pushActor();
@@ -662,6 +673,68 @@ QByteArray SerializeMessage(
 		push("is_limited", data.limited);
 		push("is_anonymous", data.anonymous);
 		pushBare("gift_text", SerializeText(context, data.text));
+	}, [&](const ActionPaidMessagesRefunded &data) {
+		pushActor();
+		pushAction("paid_messages_refund");
+		push("messages_count", data.messages);
+		push("stars_count", data.stars);
+	}, [&](const ActionPaidMessagesPrice &data) {
+		pushActor();
+		pushAction("paid_messages_price_change");
+		push("price_stars", data.stars);
+		push("is_broadcast_messages_allowed", data.broadcastAllowed);
+	}, [&](const ActionTodoCompletions &data) {
+		pushActor();
+		pushAction("todo_completions");
+		auto completed = QByteArrayList();
+		for (const auto index : data.completed) {
+			completed.push_back(QByteArray::number(index));
+		}
+		auto incompleted = QByteArrayList();
+		for (const auto index : data.incompleted) {
+			incompleted.push_back(QByteArray::number(index));
+		}
+		pushBare("completed", '[' + completed.join(',') + ']');
+		pushBare("incompleted", '[' + incompleted.join(',') + ']');
+	}, [&](const ActionTodoAppendTasks &data) {
+		pushActor();
+		pushAction("todo_append_tasks");
+		const auto items = ranges::views::all(
+			data.items
+		) | ranges::views::transform([&](const TodoListItem &item) {
+			context.nesting.push_back(Context::kArray);
+			auto result = SerializeObject(context, {
+				{ "text", SerializeText(context, item.text) },
+				{ "id", NumberToString(item.id) },
+			});
+			context.nesting.pop_back();
+			return result;
+		}) | ranges::to_vector;
+		pushBare("items", SerializeArray(context, items));
+	}, [&](const ActionSuggestedPostApproval &data) {
+		pushActor();
+		pushAction("process_suggested_post");
+		if (data.rejected) {
+			pushBare("rejected", "true");
+			if (!data.rejectComment.isEmpty()) {
+				push("comment", data.rejectComment);
+			}
+		} else {
+			push("price_amount_whole", NumberToString(data.price.whole()));
+			push("price_amount_nano", NumberToString(data.price.nano()));
+			push("price_currency", data.price.ton() ? "TON" : "Stars");
+			push("scheduled_date", data.scheduleDate);
+		}
+	}, [&](const ActionSuggestedPostSuccess &data) {
+		pushActor();
+		pushAction("suggested_post_success");
+		push("price_amount_whole", NumberToString(data.price.whole()));
+		push("price_amount_nano", NumberToString(data.price.nano()));
+		push("price_currency", data.price.ton() ? "TON" : "Stars");
+	}, [&](const ActionSuggestedPostRefund &data) {
+		pushActor();
+		pushAction("suggested_post_refund");
+		push("user_initiated", data.payerInitiated);
 	}, [](v::null_t) {});
 
 	if (v::is_null(message.action.content)) {
@@ -696,8 +769,10 @@ QByteArray SerializeMessage(
 	}, [&](const Document &data) {
 		pushPath(data.file, "file");
 		push("file_name", data.name);
+		push("file_size", data.file.size);
 		if (data.thumb.width > 0) {
 			pushPath(data.thumb.file, "thumbnail");
+			push("thumbnail_file_size", data.thumb.file.size);
 		}
 		const auto pushType = [&](const QByteArray &value) {
 			push("media_type", value);
@@ -739,6 +814,7 @@ QByteArray SerializeMessage(
 		}));
 		if (!data.vcard.content.isEmpty()) {
 			pushPath(data.vcard, "contact_vcard");
+			push("contact_vcard_file_size", data.vcard.size);
 		}
 	}, [&](const GeoPoint &data) {
 		pushBare(
@@ -786,7 +862,7 @@ QByteArray SerializeMessage(
 		) | ranges::views::transform([&](const Poll::Answer &answer) {
 			context.nesting.push_back(Context::kArray);
 			auto result = SerializeObject(context, {
-				{ "text", SerializeString(answer.text) },
+				{ "text", SerializeText(context, answer.text) },
 				{ "voters", NumberToString(answer.votes) },
 				{ "chosen", answer.my ? "true" : "false" },
 			});
@@ -797,9 +873,34 @@ QByteArray SerializeMessage(
 		context.nesting.pop_back();
 
 		pushBare("poll", SerializeObject(context, {
-			{ "question", SerializeString(data.question) },
+			{ "question", SerializeText(context, data.question) },
 			{ "closed", data.closed ? "true" : "false" },
 			{ "total_voters", NumberToString(data.totalVotes) },
+			{ "answers", serialized }
+		}));
+	}, [&](const TodoList &data) {
+		context.nesting.push_back(Context::kObject);
+		const auto items = ranges::views::all(
+			data.items
+		) | ranges::views::transform([&](const TodoListItem &item) {
+			context.nesting.push_back(Context::kArray);
+			auto result = SerializeObject(context, {
+				{ "text", SerializeText(context, item.text) },
+				{ "id", NumberToString(item.id) },
+			});
+			context.nesting.pop_back();
+			return result;
+		}) | ranges::to_vector;
+		const auto serialized = SerializeArray(context, items);
+		context.nesting.pop_back();
+
+		pushBare("todo_list", SerializeObject(context, {
+			{ "title", SerializeText(context, data.title) },
+			{ "others_can_append", data.othersCanAppend ? "true" : "false" },
+			{
+				"others_can_complete",
+				data.othersCanComplete ? "true" : "false",
+			},
 			{ "answers", serialized }
 		}));
 	}, [&](const GiveawayStart &data) {

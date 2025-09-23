@@ -768,33 +768,49 @@ void StickerSetBox::updateButtons() {
 					&st::menuIconManage);
 			});
 		}();
-		const auto addPackOwner = [=](const std::shared_ptr<base::unique_qptr<Ui::PopupMenu>> &menu)
+		const auto addPackIdActions = [=](const std::shared_ptr<base::unique_qptr<Ui::PopupMenu>> &menu)
 		{
 			if (type == Data::StickersType::Stickers || type == Data::StickersType::Emoji) {
-				const auto pointer = Ui::MakeWeak(this);
+				const auto &settings = AyuSettings::getInstance();
+				const auto weak = Ui::MakeWeak(this);
+				const auto session = _session;
+				const auto setId = _inner->setId();
+				const auto innerId = setId >> 32;
+
 				(*menu)->addAction(
 					tr::ayu_MessageDetailsPackOwnerPC(tr::now),
-					[=]
+					[weak, session, innerId]
 					{
-						if (!pointer) {
+						if (!weak) {
+							return;
+						}
+
+						const auto strong = weak.data();
+						if (!strong) {
 							return;
 						}
 
 						searchById(
-							_inner->setId() >> 32,
-							_session,
-							[=](const QString &username, UserData *user)
+							innerId,
+							session,
+							[session, weak, innerId](const QString &username, UserData *user)
 							{
-								if (!pointer) {
+								if (!weak) {
+									return;
+								}
+
+								const auto strongInner = weak.data();
+								if (!strongInner) {
 									return;
 								}
 
 								if (!user) {
-									showToast(tr::ayu_UserNotFoundMessage(tr::now));
+									QGuiApplication::clipboard()->setText(QString::number(innerId));
+									strongInner->showToast(tr::ayu_IDCopiedToast(tr::now));
 									return;
 								}
 
-								if (const auto window = _session->tryResolveWindow()) {
+								if (const auto window = session->tryResolveWindow()) {
 									if (const auto mainWidget = window->widget()->sessionController()) {
 										mainWidget->showPeer(user);
 									}
@@ -802,6 +818,26 @@ void StickerSetBox::updateButtons() {
 							});
 					},
 					&st::menuIconProfile);
+
+				if (settings.showPeerId != 0) {
+					(*menu)->addAction(
+						tr::ayu_ContextCopyID(tr::now),
+						[weak, session, setId]
+						{
+							if (!weak) {
+								return;
+							}
+
+							const auto strongInner = weak.data();
+							if (!strongInner) {
+								return;
+							}
+
+							QGuiApplication::clipboard()->setText(QString::number(setId));
+							strongInner->showToast(tr::ayu_IDCopiedToast(tr::now));
+						},
+						&st::menuIconCopy);
+				}
 			}
 		};
 		if (_inner->notInstalled()) {
@@ -817,9 +853,7 @@ void StickerSetBox::updateButtons() {
 					- st.buttonPadding.left()
 					- st.buttonPadding.left());
 				button->setClickedCallback([=] {
-					using namespace ChatHelpers;
-					const auto usage = WindowUsage::PremiumPromo;
-					if (const auto window = _show->resolveWindow(usage)) {
+					if (const auto window = _show->resolveWindow()) {
 						Settings::ShowPremium(window, u"animated_emoji"_q);
 					}
 				});
@@ -853,7 +887,7 @@ void StickerSetBox::updateButtons() {
 							: tr::lng_stickers_share_pack)(tr::now),
 						[=] { share(); closeBox(); },
 						&st::menuIconShare);
-					addPackOwner(menu);
+					addPackIdActions(menu);
 					(*menu)->popup(QCursor::pos());
 					return true;
 				});
@@ -906,7 +940,7 @@ void StickerSetBox::updateButtons() {
 							archive,
 							&st::menuIconArchive);
 					}
-					addPackOwner(menu);
+					addPackIdActions(menu);
 					(*menu)->popup(QCursor::pos());
 					return true;
 				});
@@ -1474,6 +1508,16 @@ void StickerSetBox::Inner::contextMenuEvent(QContextMenuEvent *e) {
 					QGuiApplication::clipboard()->setMimeData(data.release());
 				}
 			}, &st::menuIconCopy);
+
+			const auto &settings = AyuSettings::getInstance();
+			if (settings.showPeerId != 0) {
+				_menu->addAction(tr::ayu_ContextCopyID(tr::now),
+								 [=]
+								 {
+									 QGuiApplication::clipboard()->setText(QString::number(_pack[index]->id));
+								 },
+								 &st::menuIconCopy);
+			}
 		}
 	} else if (details.type != SendMenu::Type::Disabled) {
 		const auto document = _pack[index];
@@ -1564,7 +1608,7 @@ void StickerSetBox::Inner::fillDeleteStickerBox(
 	sticker->paintRequest(
 	) | rpl::start_with_next([=] {
 		auto p = Painter(sticker);
-		if (const auto strong = weak.data()) {
+		if ([[maybe_unused]] const auto strong = weak.data()) {
 			const auto paused = On(PowerSaving::kStickersPanel)
 				|| show->paused(ChatHelpers::PauseReason::Layer);
 			paintSticker(p, index, QPoint(), paused, crl::now());
@@ -1618,7 +1662,7 @@ void StickerSetBox::Inner::fillDeleteStickerBox(
 					Data::StickersType::Stickers);
 			}, [](const auto &) {
 			});
-			if (const auto strong = weak.data()) {
+			if ([[maybe_unused]] const auto strong = weak.data()) {
 				applySet(result);
 			}
 			if (const auto strongBox = weakBox.data()) {

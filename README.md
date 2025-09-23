@@ -12,6 +12,7 @@
 - Font customization
 - Streamer mode
 - Local Telegram Premium
+- Translator
 - Media preview & quick reaction on force click (macOS)
 - Enhanced appearance
 
@@ -34,7 +35,7 @@ And many more. Check out our [Documentation](https://docs.ayugram.one/desktop/).
 #### Official
 
 You can download prebuilt Windows binary from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases) or from
-the [Telegram topic](https://t.me/ayugramchat/12788).
+the [Telegram channel](https://t.me/AyuGramReleases).
 
 #### Winget
 
@@ -56,19 +57,45 @@ build by yourself.
 
 ### macOS
 
+#### Official
+
 You can download prebuilt macOS package from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases).
+
+#### Homebrew
+
+```bash
+brew install --cask ayugram
+```
 
 ### Arch Linux
 
-You can install `ayugram-desktop` from [AUR](https://aur.archlinux.org/packages?O=0&K=ayugram).
+#### From source (recommended)
+
+Install `ayugram-desktop` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop).
+
+#### Prebuilt binaries
+
+Install `ayugram-desktop-bin` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop-bin).
+
+Note: these binaries aren't officially maintained by us.
 
 ### NixOS
 
 See [this repository](https://github.com/ayugram-port/ayugram-desktop) for installation manual.
 
+### ALT Linux
+
+[Sisyphus](https://packages.altlinux.org/en/sisyphus/srpms/ayugram-desktop/)
+
+### EPM
+
+`epm play ayugram`
+
 ### Any other Linux distro
 
-Follow the [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
+Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
+
+Or follow the [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
 ### Remarks for Windows
 
@@ -102,3 +129,7 @@ Enjoy using **AyuGram**? Consider sending us a tip!
 ### Icons
 
 - [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736)
+
+### Bots
+
+- [TelegramDB](https://t.me/tgdatabase) for username lookup by ID

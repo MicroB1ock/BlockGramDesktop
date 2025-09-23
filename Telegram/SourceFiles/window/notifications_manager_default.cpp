@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/ui_utility.h"
+#include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_forum_topic.h"
 #include "data/stickers/data_custom_emoji.h"
@@ -203,16 +204,10 @@ void Manager::checkLastInput() {
 
 void Manager::startAllHiding() {
 	if (!hasReplyingNotification()) {
-		int notHidingCount = 0;
 		for (const auto &notification : _notifications) {
-			if (notification->isShowing()) {
-				++notHidingCount;
-			} else {
-				notification->startHiding();
-			}
+			notification->startHiding();
 		}
-		notHidingCount += _queuedNotifications.size();
-		if (_hideAll && notHidingCount < 2) {
+		if (_hideAll && _queuedNotifications.size() < 2) {
 			_hideAll->startHiding();
 		}
 	}
@@ -262,6 +257,7 @@ void Manager::showNextFromQueue() {
 			this,
 			queued.history,
 			queued.topicRootId,
+			queued.monoforumPeerId,
 			queued.peer,
 			queued.author,
 			queued.item,
@@ -409,7 +405,25 @@ void Manager::doClearFromTopic(not_null<Data::ForumTopic*> topic) {
 		}
 	}
 	for (const auto &notification : _notifications) {
-		if (notification->unlinkHistory(history, topicRootId)) {
+		if (notification->unlinkHistory(history, topicRootId, PeerId())) {
+			_positionsOutdated = true;
+		}
+	}
+	showNextFromQueue();
+}
+
+void Manager::doClearFromSublist(not_null<Data::SavedSublist*> sublist) {
+	const auto history = sublist->owningHistory();
+	const auto sublistPeerId = sublist->sublistPeer()->id;
+	for (auto i = _queuedNotifications.begin(); i != _queuedNotifications.cend();) {
+		if (i->history == history && i->monoforumPeerId == sublistPeerId) {
+			i = _queuedNotifications.erase(i);
+		} else {
+			++i;
+		}
+	}
+	for (const auto &notification : _notifications) {
+		if (notification->unlinkHistory(history, MsgId(), sublistPeerId)) {
 			_positionsOutdated = true;
 		}
 	}
@@ -575,6 +589,10 @@ void Widget::hideStop() {
 
 void Widget::hideAnimated(float64 duration, const anim::transition &func) {
 	_hiding = true;
+	// Stop the previous animation so as to make sure that the notification
+	// is fully restored before hiding it again.
+	// Relates to https://github.com/telegramdesktop/tdesktop/issues/28811.
+	_a_opacity.stop();
 	_a_opacity.start([this] { opacityAnimationCallback(); }, 1., 0., duration, func);
 }
 
@@ -640,6 +658,7 @@ Notification::Notification(
 	not_null<Manager*> manager,
 	not_null<History*> history,
 	MsgId topicRootId,
+	PeerId monoforumPeerId,
 	not_null<PeerData*> peer,
 	const QString &author,
 	HistoryItem *item,
@@ -655,7 +674,9 @@ Notification::Notification(
 , _history(history)
 , _topic(history->peer->forumTopicFor(topicRootId))
 , _topicRootId(topicRootId)
-, _userpicView(_peer->createUserpicView())
+, _sublist(history->peer->monoforumSublistFor(monoforumPeerId))
+, _monoforumPeerId(monoforumPeerId)
+, _userpicView(_peer->userpicPaintingPeer()->createUserpicView())
 , _author(author)
 , _reaction(reaction)
 , _item(item)
@@ -975,10 +996,10 @@ void Notification::updateNotifyDisplay() {
 				0,
 				Qt::LayoutDirectionAuto,
 			};
-			const auto context = Core::MarkedTextContext{
+			const auto context = Core::TextContext({
 				.session = &_history->session(),
-				.customEmojiRepaint = [=] { customEmojiCallback(); },
-			};
+				.repaint = [=] { customEmojiCallback(); },
+			});
 			_textCache.setMarkedText(
 				st::dialogsTextStyle,
 				text,
@@ -1014,10 +1035,10 @@ void Notification::updateNotifyDisplay() {
 		const auto fullTitle = manager()->addTargetAccountName(
 			std::move(title),
 			&_history->session());
-		const auto context = Core::MarkedTextContext{
+		const auto context = Core::TextContext({
 			.session = &_history->session(),
-			.customEmojiRepaint = [=] { customEmojiCallback(); },
-		};
+			.repaint = [=] { customEmojiCallback(); },
+		});
 		_titleCache.setMarkedText(
 			st::semiboldTextStyle,
 			fullTitle,
@@ -1175,10 +1196,14 @@ void Notification::changeHeight(int newHeight) {
 	manager()->changeNotificationHeight(this, newHeight);
 }
 
-bool Notification::unlinkHistory(History *history, MsgId topicRootId) {
+bool Notification::unlinkHistory(
+		History *history,
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
 	const auto unlink = _history
 		&& (history == _history || !history)
-		&& (topicRootId == _topicRootId || !topicRootId);
+		&& (topicRootId == _topicRootId || !topicRootId)
+		&& (monoforumPeerId == _monoforumPeerId || !monoforumPeerId);
 	if (unlink) {
 		hideFast();
 		_history = nullptr;
@@ -1228,7 +1253,9 @@ void Notification::mousePressEvent(QMouseEvent *e) {
 		unlinkHistoryInManager();
 	} else {
 		e->ignore();
-		manager()->notificationActivated(myId());
+		manager()->notificationActivated(myId(), {
+			.allowNewWindow = true,
+		});
 	}
 }
 

@@ -386,16 +386,26 @@ Panel::Panel(Args &&args)
 , _allowClipboardRead(args.allowClipboardRead) {
 	_widget->setWindowFlag(Qt::WindowStaysOnTopHint, false);
 
-	const auto settings = &AyuSettings::getInstance();
+	const auto &settings = AyuSettings::getInstance();
 	auto size = QSize(st::botWebViewPanelSize);
-	if (settings->increaseWebviewHeight) {
+	if (settings.increaseWebviewHeight) {
 		size.setHeight(st::botWebViewPanelHeightIncreased);
 	}
-	if (settings->increaseWebviewWidth) {
+	if (settings.increaseWebviewWidth) {
 		size.setWidth(st::botWebViewPanelWidthIncreased);
 	}
 
 	_widget->setInnerSize(size, true);
+
+	const auto panel = _widget.get();
+	rpl::duplicate(
+		args.title
+	) | rpl::start_with_next([=](const QString &title) {
+		const auto value = tr::lng_credits_box_history_entry_miniapp(tr::now)
+			+ u": "_q
+			+ title;
+		panel->window()->setWindowTitle(value);
+	}, panel->lifetime());
 
 	const auto params = _delegate->botThemeParams();
 	updateColorOverrides(params);
@@ -1002,6 +1012,20 @@ bool Panel::createWebview(const Webview::ThemeParams &params) {
 			processEmojiStatusRequest(arguments);
 		} else if (command == "web_app_request_emoji_status_access") {
 			processEmojiStatusAccessRequest();
+		} else if (command == "web_app_device_storage_save_key") {
+			processStorageSaveKey(arguments);
+		} else if (command == "web_app_device_storage_get_key") {
+			processStorageGetKey(arguments);
+		} else if (command == "web_app_device_storage_clear") {
+			processStorageClear(arguments);
+		} else if (command == "web_app_secure_storage_save_key") {
+			secureStorageFailed(arguments);
+		} else if (command == "web_app_secure_storage_get_key") {
+			secureStorageFailed(arguments);
+		} else if (command == "web_app_secure_storage_restore_key") {
+			secureStorageFailed(arguments);
+		} else if (command == "web_app_secure_storage_clear") {
+			secureStorageFailed(arguments);
 		} else if (command == "share_score") {
 			_delegate->botHandleMenuButton(MenuButton::ShareGame);
 		}
@@ -1204,6 +1228,63 @@ void Panel::processEmojiStatusAccessRequest() {
 			: "{ status: \"cancelled\" }");
 	});
 	_delegate->botRequestEmojiStatusAccess(std::move(callback));
+}
+
+void Panel::processStorageSaveKey(const QJsonObject &args) {
+	const auto keyObject = args["key"];
+	const auto valueObject = args["value"];
+	const auto key = keyObject.toString();
+	if (!keyObject.isString()) {
+		deviceStorageFailed(args, u"KEY_INVALID"_q);
+	} else if (valueObject.isNull()) {
+		_delegate->botStorageWrite(key, std::nullopt);
+		replyDeviceStorage(args, u"device_storage_key_saved"_q, {});
+	} else if (!valueObject.isString()) {
+		deviceStorageFailed(args, u"VALUE_INVALID"_q);
+	} else if (_delegate->botStorageWrite(key, valueObject.toString())) {
+		replyDeviceStorage(args, u"device_storage_key_saved"_q, {});
+	} else {
+		deviceStorageFailed(args, u"QUOTA_EXCEEDED"_q);
+	}
+}
+
+void Panel::processStorageGetKey(const QJsonObject &args) {
+	const auto keyObject = args["key"];
+	const auto key = keyObject.toString();
+	if (!keyObject.isString()) {
+		deviceStorageFailed(args, u"KEY_INVALID"_q);
+	} else {
+		const auto value = _delegate->botStorageRead(key);
+		replyDeviceStorage(args, u"device_storage_key_received"_q, {
+			{ u"value"_q, value ? QJsonValue(*value) : QJsonValue::Null },
+		});
+	}
+}
+
+void Panel::processStorageClear(const QJsonObject &args) {
+	_delegate->botStorageClear();
+	replyDeviceStorage(args, u"device_storage_cleared"_q, {});
+}
+
+void Panel::replyDeviceStorage(
+		const QJsonObject &args,
+		const QString &event,
+		QJsonObject response) {
+	response[u"req_id"_q] = args[u"req_id"_q];
+	postEvent(event, response);
+}
+
+void Panel::deviceStorageFailed(const QJsonObject &args, QString error) {
+	replyDeviceStorage(args, u"device_storage_failed"_q, {
+		{ u"error"_q, error },
+	});
+}
+
+void Panel::secureStorageFailed(const QJsonObject &args) {
+	postEvent(u"secure_storage_failed"_q, QJsonObject{
+		{ u"req_id"_q, args["req_id"] },
+		{ u"error"_q, u"UNSUPPORTED"_q },
+	});
 }
 
 void Panel::openTgLink(const QJsonObject &args) {
