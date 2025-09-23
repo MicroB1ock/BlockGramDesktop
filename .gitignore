@@ -1,6 +1,9 @@
 /out/
 Debug/
-build/
+/build/
+CMakeCache.txt
+build/.cmake
+build/CMakeFiles
 Release/
 /ThirdParty/
 /Telegram/build/target
@@ -57,3 +60,4 @@ cmake-build-debug/
 
 # Project specific
 Telegram/SourceFiles/_other/packer_private.h
+Telegram/build/CMakeFiles

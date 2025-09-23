@@ -997,6 +997,7 @@ win:
         -DBUILD_SHARED_LIBS=OFF ^
         -DBUILD_TESTING=OFF ^
         -DENABLE_PLUGIN_LOADING=OFF ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=TRUE ^
         -DWITH_LIBDE265=ON ^
         -DWITH_OpenH264_DECODER=OFF ^
         -DWITH_SvtEnc=OFF ^
